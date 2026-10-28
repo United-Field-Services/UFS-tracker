@@ -9,6 +9,8 @@ export interface Config {
   webSessionHours: number;
   deviceSessionDays: number;
   now: () => number;
+  /** DEVELOPMENT ONLY (WEBHOOK_DEV=1): lets webhooks target http and private addresses so they can be tested locally. Never set in production. */
+  webhookDev: boolean;
 }
 
 export function loadConfig(overrides: Partial<Config> = {}): Config {
@@ -22,6 +24,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     webSessionHours: 12,
     deviceSessionDays: 90,
     now: () => Date.now(),
+    webhookDev: process.env.WEBHOOK_DEV === '1',
     ...overrides,
   };
 }

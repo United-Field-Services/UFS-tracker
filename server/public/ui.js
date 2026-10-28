@@ -70,6 +70,12 @@ const ICON_PATHS = {
   policy: 'M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M14 4v4M8 10v4M16 16v4',
   audit: 'M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01',
   account: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM4 21a8 8 0 0 1 16 0',
+  team: 'M3 20h18M6 20V10M12 20V4M18 20v-7',
+  timeline: 'M4 6h8M4 12h14M4 18h6M16 6h4M20 18h0M12 18h8',
+  bell: 'M6 9a6 6 0 0 1 12 0c0 6 2 7 2 7H4s2-1 2-7M10 20a2 2 0 0 0 4 0',
+  integrations: 'M9 7H6a3 3 0 0 0 0 6h3M15 7h3a3 3 0 0 1 0 6h-3M8 10h8',
+  payroll: 'M12 3v18M16 7.5c0-1.4-1.8-2.5-4-2.5s-4 1.1-4 2.5S9.8 10 12 10s4 1.1 4 2.5-1.8 2.5-4 2.5-4-1.1-4-2.5',
+  privacy: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6zM9 12l2 2 4-4',
   empty: 'M4 7l2-3h12l2 3v12H4zM4 7h16M9 12h6',
 };
 function icon(name, size = 18) {
@@ -94,8 +100,15 @@ function rowMenu(items, label = 'More') {
   const list = h('div', { class: 'menu-list' }, items.map(item => h('button', { class: `menu-item${item.danger ? ' danger' : ''}`, type: 'button', onclick: event => { event.target.closest('details').open = false; item.onclick(event); } }, item.label)));
   const details = h('details', { class: 'menu' }, h('summary', { class: 'btn small', 'aria-haspopup': 'menu' }, label, ' ', h('span', { 'aria-hidden': 'true' }, '▾')), list);
   // The list is fixed-position so a scrolling table wrapper never clips it; place it under the button when it opens.
-  details.addEventListener('toggle', () => { if (!details.open) return; const rect = details.querySelector('summary').getBoundingClientRect(); list.style.top = `px`; list.style.right = `px`; });
+  details.addEventListener('toggle', () => placeMenu(details));
   return details;
+}
+/** Places an open menu next to its button: below it, or above it when there is no room below. Re-run while the page scrolls. */
+function placeMenu(details) {
+  if (!details.open) return;
+  const list = details.querySelector('.menu-list'), rect = details.querySelector('summary').getBoundingClientRect(), height = list.offsetHeight;
+  const top = rect.bottom + 4 + height > window.innerHeight - 8 && rect.top - 4 - height > 8 ? rect.top - 4 - height : rect.bottom + 4;
+  list.style.top = `${top}px`; list.style.right = `${Math.max(8, window.innerWidth - rect.right)}px`;
 }
 document.addEventListener('click', event => { for (const open of document.querySelectorAll('details.menu[open]')) if (!open.contains(event.target)) open.open = false; });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') for (const open of document.querySelectorAll('details.menu[open]')) { open.open = false; open.querySelector('summary')?.focus(); } });
@@ -120,4 +133,4 @@ function emptyState(text, hint) {
   return h('div', { class: 'empty' }, h('div', { class: 'empty-icon' }, icon('empty', 28)), h('p', { class: 'empty-title' }, text), hint ? h('p', { class: 'muted small' }, hint) : null);
 }
 
-window.addEventListener('scroll', () => { for (const open of document.querySelectorAll('details.menu[open]')) open.open = false; }, true);
+window.addEventListener('scroll', () => { for (const open of document.querySelectorAll('details.menu[open]')) placeMenu(open); }, true); // the menu follows its button

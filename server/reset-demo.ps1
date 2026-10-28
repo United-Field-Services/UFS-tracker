@@ -14,6 +14,8 @@ Start-Sleep 2
 $env:DIRECTORY_URL = 'http://127.0.0.1:4310/directory.json'
 $env:DIRECTORY_TOKEN = 'fake-directory-token-for-local-dev-only'
 $env:DIRECTORY_OWNER_EMPLOYEE_ID = 'emp-001'
+# Local demo only: lets webhooks target http/localhost receivers so they can be tried without a public server. Never set this in production.
+$env:WEBHOOK_DEV = '1'
 $env:SUPABASE_URL = 'http://127.0.0.1:4320'
 $env:SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_fake_local_dev_key_0123456789'
 Start-Process -FilePath node -ArgumentList 'src/server.ts' -WorkingDirectory $PSScriptRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:TEMP 'tracker-server.log') -RedirectStandardError (Join-Path $env:TEMP 'tracker-server.err')

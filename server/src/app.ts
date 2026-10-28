@@ -14,6 +14,10 @@ import { purgeExpiredScreenshots } from './retention.ts';
 import { loadDirectoryConfig, type DirectoryConfig } from './directory.ts';
 import { directoryRoutes } from './routes-directory.ts';
 import { portalRoutes } from './routes-portal.ts';
+import { meRoutes } from './routes-me.ts';
+import { payrollRoutes } from './routes-payroll.ts';
+import { apiKeyRoutes, publicApiRoutes } from './routes-api.ts';
+import { webhookRoutes } from './routes-webhooks.ts';
 import { SupabaseAuth, loadSupabaseConfig } from './supabase-auth.ts';
 
 export interface App { app: express.Express; ctx: Ctx; db: Db; close(): void; }
@@ -50,6 +54,7 @@ export function createApp(overrides: Partial<Config> & { store?: BlobStore; db?:
     });
   });
 
+  app.use(publicApiRoutes(ctx)); // read-only public API: its own key authentication, registered before the session-token API
   const authed = express.Router();
   authed.use('/api', authenticate(db, cfg), blockUntilPasswordChanged);
   authed.use(accountRoutes(ctx));
@@ -58,6 +63,10 @@ export function createApp(overrides: Partial<Config> & { store?: BlobStore; db?:
   authed.use(reportRoutes(ctx));
   authed.use(directoryRoutes(ctx));
   authed.use(portalRoutes(ctx));
+  authed.use(meRoutes(ctx));
+  authed.use(payrollRoutes(ctx));
+  authed.use(apiKeyRoutes(ctx));
+  authed.use(webhookRoutes(ctx));
   authed.post('/api/admin/retention/run', requireRole('owner', 'admin'), async (_req, res) => { res.json({ removed: await purgeExpiredScreenshots(ctx) }); });
   app.use(authed);
 

@@ -11,7 +11,7 @@ Legend: ✅ done (tested against fakes/synthetic data) · 🟡 partial · ❌ no
 | Automatic tracking (starts without a click) | B | ⛔ | We never start tracking by ourselves; schedule reminders only (A11). A visible, consented "start on sign-in" option could be reviewed with HR/legal. |
 | Online and offline tracking | B | ✅ | A6 queue with retry |
 | Groups / teams | B | ✅ | teams, org chart from UFS People |
-| Break tracking | S | 🟡 | A11 reminders only; no break records. Next: dedicated break entries. |
+| Break tracking | S | ✅ | A11 (2026-10-29): **Take a break** button in the desktop app (and the break reminder) records a break; breaks sync with the company time entry and show on the Day view, the Team page and in the employee's data export. Break time is not tracked time. Not built: break rules (minimum/maximum breaks) and closed-app reminders. |
 | Work scheduling, time approvals | S | 🟡 / ✅ | schedule policy + approvals done; leave source missing |
 | Manual time entry with approval | S | ✅ | A10 |
 | Time management tools / wellness reminders | S | 🟡 | break reminders in-app only; closed-app reminders missing |
@@ -41,22 +41,24 @@ Legend: ✅ done (tested against fakes/synthetic data) · 🟡 partial · ❌ no
 | Feature | Tier | Us | Notes |
 |---|---|---|---|
 | Attendance, missing-hours capture | S | 🟡 | C5 evidence report; no leave/holiday source |
-| Real-time notifications for missed hours | S | ❌ | B10 notifications and email |
-| Timeline and hours reports | B/S | ✅ | hours report + CSV; per-day timeline view could be richer |
+| Real-time notifications for missed hours | S | 🟡 | B10 (2026-10-29): in-app notification bell for approvals, rejections, reviewer edits, manual-time requests, directory sync problems and data requests, with an email outbox (opt-in per person). Missing: missed-hours alerts and real email delivery (needs a mail provider account). |
+| Employee data export and deletion on request | (n/a) | ✅ | B15 (2026-10-29): "Privacy and data" page: download my data as JSON (includes who looked at my screenshots), request deletion of screenshots and activity data, admin queue to fulfil or decline with reasons, audited |
+| Timeline and hours reports | B/S | ✅ | hours report + CSV; **Day view** (2026-10-29): 24-hour bar per person with screenshot ticks, activity per hour, screenshot strip |
+| Team overview (who worked how much, approvals waiting) | S | ✅ | **Team page** (2026-10-29): per-person daily mini chart, status, totals, approvals, screenshots; facts only |
 | Real-time dashboard | S | ✅ | live status |
 | Admin dashboard with org-wide stats | P | ✅ | Admin portal (2026-10-28): attention list, key numbers, hours and screenshot charts, storage, system health; see `DASHBOARD-AUDIT-AND-PLAN.md` |
 | Screenshot management (browse, filter, bulk delete, storage view) | B | ✅ | screenshot manager (2026-10-28): filters, paging, select and bulk delete with audit, viewer, download |
 | Executive and custom dashboards, BI | P/E | ❌ | later |
-| Custom data exports | S | 🟡 | CSV only; no scheduled email reports (C8) |
+| Custom data exports and scheduled reports | S | 🟡 | CSV exports; **weekly report subscriptions** (2026-10-29, C8): team hours, my hours and an approvals digest, per person, own timezone, limited to what the subscriber can see, delivered under the bell and queued as email (real email needs a mail provider account) |
 
 ## Payroll and integrations
 | Feature | Tier | Us | Notes |
 |---|---|---|---|
-| Payroll-ready reports, pay rates | S | ❌ | B14/C11 |
+| Payroll-ready reports, pay rates | S | 🟡 | B14/C11 (2026-10-29): pay-rate history per person (owner/admin set, HR view), Payroll page with preview and CSV/JSON export of APPROVED time only, missing rates flagged, audited. Missing: overtime rules, pay periods and locking, invoices, pushing to payroll systems. |
 | Payroll/HRIS links (ADP, Gusto, Deel, BambooHR, Workday, Rippling) | add-on | ❌ | B13; UFS People link is our own HR source |
 | Project tools (Jira, Asana, Trello, ClickUp, GitHub, ...) | S | ❌ | B13 |
 | Help desk, CRM, communication integrations | S | ❌ | low priority for an internal tool |
-| Open API, webhooks | P | ❌ | B12 |
+| Open API, webhooks | P | ✅ | B12 (2026-10-29): API keys (owner/admin, shown once, hashed, revocable) and a read-only public API (/api/v1 people, projects, approved time entries; no screenshots, activity, breaks or pay); **signed webhooks** for time approved/rejected/submitted/edited with SSRF-safe delivery (public https hosts only, resolved-address checks, pinned connection, no redirects), retries with backoff, auto-disable and a delivery log |
 | MCP connection, Ask AI | all | ❌ | optional later |
 
 ## Admin, security and platform
@@ -74,7 +76,7 @@ Legend: ✅ done (tested against fakes/synthetic data) · 🟡 partial · ❌ no
 | Chrome extension, mobile apps | all | ❌ | A14 |
 
 ## Where we are (counting the rows above)
-Counted from the 45 rows above (updated after the Admin portal and screenshot manager): **17 done, 7 partial, 17 not started, 4 deliberately not planned.** Of the 41 features we intend to build that is roughly **50% covered** (partials counted as half). The biggest gaps are app/website usage (consented), payroll and integrations, notifications and email, Mac/Linux/mobile, and the premium analytics. The strong side is core time tracking, screenshots, approvals, roles, reports and the HR directory link.
+Counted from the 47 rows above (updated 2026-10-29 after webhooks): **22 done, 8 partial, 13 not started, 4 deliberately not planned.** Of the 43 features we intend to build that is roughly **60% covered** (partials counted as half). The biggest gaps are app/website usage (consented), third-party integrations (Jira, Asana, payroll systems), real email delivery, Mac/Linux/mobile, and the premium analytics. The strong side is core time tracking, breaks, screenshots and their management, approvals, payroll export, roles, the admin portal, Team and Day views, scheduled reports, the public API and webhooks, privacy tools and the HR directory link.
 
 ## Suggested order (parallel tracks)
 1. **Track A, product:** notifications and email (B10) and scheduled reports (C8); break records (A11); leave/holiday source (C5); then payroll exports and pay rates (B14, C11); data export/deletion (B15).

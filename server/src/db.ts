@@ -249,6 +249,76 @@ const MIGRATIONS: string[] = [
       active_seconds=active_seconds+NEW.active_seconds,keyboard_count=keyboard_count+NEW.keyboard_count,mouse_count=mouse_count+NEW.mouse_count;
   END;
   `,
+  // 7: in-app notifications with an email outbox, pay-rate history (payroll export) and data-deletion requests.
+  `
+  ALTER TABLE users ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT, link TEXT,
+    created_at TEXT NOT NULL, read_at TEXT
+  );
+  CREATE INDEX notifications_user ON notifications(user_id, read_at, id);
+  CREATE TABLE email_outbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    subject TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL,
+    sent_at TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT
+  );
+  CREATE INDEX email_outbox_pending ON email_outbox(sent_at, attempts);
+  CREATE TABLE pay_rates (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    hourly_cents INTEGER NOT NULL CHECK (hourly_cents >= 0),
+    currency TEXT NOT NULL, effective_from TEXT NOT NULL, created_by TEXT, created_at TEXT NOT NULL
+  );
+  CREATE INDEX pay_rates_user ON pay_rates(user_id, effective_from);
+  CREATE TABLE data_requests (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('delete')), note TEXT,
+    status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','fulfilled','declined')),
+    created_at TEXT NOT NULL, resolved_by TEXT, resolved_at TEXT, resolution_note TEXT
+  );
+  `,
+  // 8: break records (pauses the employee chose as a break), synced with the company time entry.
+  `  CREATE TABLE breaks (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, entry_client_id TEXT NOT NULL, start_at TEXT NOT NULL, end_at TEXT,
+    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+    UNIQUE (user_id, entry_client_id, start_at),
+    FOREIGN KEY (user_id, entry_client_id) REFERENCES time_entries(user_id, client_id) ON DELETE CASCADE
+  );
+  CREATE INDEX breaks_user_start ON breaks(user_id, start_at);
+  `,
+  // 9: weekly report subscriptions (delivered as in-app notifications and, when a mailer exists, email).
+  `  CREATE TABLE report_subscriptions (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('team-hours','approvals','my-hours')),
+    weekday INTEGER NOT NULL CHECK (weekday BETWEEN 0 AND 6), hour INTEGER NOT NULL CHECK (hour BETWEEN 0 AND 23),
+    time_zone TEXT NOT NULL, created_at TEXT NOT NULL, last_period TEXT
+  );
+  CREATE UNIQUE INDEX report_subscriptions_unique ON report_subscriptions(user_id, kind);
+  `,
+  // 10: API keys for the read-only public API (only a hash of each key is stored).
+  `  CREATE TABLE api_keys (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, key_prefix TEXT NOT NULL, scopes TEXT NOT NULL,
+    created_by TEXT, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT
+  );
+  `,
+  // 11: webhooks (signed event pushes) and their delivery queue.
+  `  CREATE TABLE webhooks (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL, secret TEXT NOT NULL, events TEXT NOT NULL,
+    active INTEGER NOT NULL DEFAULT 1, consecutive_failures INTEGER NOT NULL DEFAULT 0, disabled_reason TEXT,
+    created_by TEXT, created_at TEXT NOT NULL
+  );
+  CREATE TABLE webhook_deliveries (
+    id TEXT PRIMARY KEY, webhook_id TEXT NOT NULL REFERENCES webhooks(id) ON DELETE CASCADE, event TEXT NOT NULL, payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','delivered','failed')), attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT NOT NULL, last_error TEXT, last_status INTEGER, created_at TEXT NOT NULL, delivered_at TEXT
+  );
+  CREATE INDEX webhook_deliveries_due ON webhook_deliveries(status, next_attempt_at);
+  CREATE INDEX webhook_deliveries_hook ON webhook_deliveries(webhook_id, created_at);
+  `,
 ];
 
 /** Applies pending migrations (optionally only up to `upTo`, for tests). Throws if any foreign key is left dangling. */

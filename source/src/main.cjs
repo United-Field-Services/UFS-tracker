@@ -66,7 +66,7 @@ function scheduleDeadline() {
     catch(error) {tracker.pause(`Time-limit check failed: ${error.message}`); broadcast();}
   }, Math.max(1, remaining));
 }
-function pause(reason) { tick(); stopActivity(); tracker.pause(reason); persist(); broadcast(); }
+function pause(reason, kind = 'manual') { tick(); stopActivity(); tracker.pause(reason, kind); persist(); broadcast(); }
 function stop() { tick(); stopActivity(); clearTimeout(deadlineTimer); const finished = tracker.stop(); save(finished); broadcast(); }
 function idle() { try { return powerMonitor.getSystemIdleTime(); } catch { return NaN; } }
 function handle(name, fn) { ipcMain.handle(`tracker:${name}`, (event, value) => { if (!win || event.sender !== win.webContents || event.senderFrame?.url !== entryUrl) throw new Error('Untrusted request.'); return fn(value); }); }
@@ -163,7 +163,8 @@ async function start() {
   });
   handle('confirm', token => { captureClock.assertHealthy(); if (finishExpired()) throw new Error('The one-hour test has ended.'); if (!win.isVisible() || win.isMinimized()) throw new Error('Keep the app window visible while tracking.'); tracker.confirm(token); try { startActivity(); } catch { persist(); broadcast(); throw new Error('Count-only activity measurement could not start. Tracking is paused.'); } scheduleDeadline(); persist(); broadcast(); return state(); });
   handle('fail', value => { tracker.fail(value?.token, process.platform === 'darwin' ? 'Screen sharing did not start. Allow screen recording in System Settings if requested, reopen the app, and try again.' : 'Screen sharing did not start. Press Resume to try again.'); persist(); broadcast(); });
-  handle('pause', () => {pause(); return state();});
+  // A break is a pause the employee chose on purpose (company sessions only); it is recorded and shown to the organization as a break.
+  handle('pause', value => {const isBreak = value?.break === true && tracker.current?.mode === 'company' && tracker.phase === 'tracking'; pause(isBreak ? 'On a break. Tracking and screenshots are paused. Press Resume when you are back.' : undefined, isBreak ? 'break' : 'manual'); return state();});
   handle('stop', () => {stop(); return state();});
   handle('idle-review', value => {
     tick();

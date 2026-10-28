@@ -161,6 +161,26 @@ td.truncate { max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
   td.truncate { max-width: none; }
 }
 
+.bell { display: flex; align-items: center; gap: 6px; width: 100%; justify-content: center; margin-bottom: var(--space-2); }
+.count { background: var(--bad); color: #fff; border-radius: 999px; min-width: 20px; padding: 0 6px; font-size: 12px; font-weight: 800; line-height: 20px; text-align: center; }
+.notes { display: grid; gap: var(--space-2); max-height: 60vh; overflow-y: auto; }
+.note { text-align: left; display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); cursor: pointer; }
+.note:hover { background: var(--surface-2); }
+.note.unread { border-left: 4px solid var(--accent); background: var(--accent-soft); }
+
+.daybar .block { stroke: none; } .daybar .block.approved { fill: var(--ok); } .daybar .block.pending { fill: var(--warn); } .daybar .block.rejected { fill: var(--bad); opacity: .7; } .daybar .block.running { fill: var(--accent); }
+.daybar .break { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 4 3; opacity: .92; } .swatch.break { background: var(--surface); border: 1.5px dashed var(--muted); }
+.daybar .shot-tick { stroke: var(--text); stroke-width: 2; opacity: .6; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin-top: var(--space-2); }
+.swatch { display: inline-block; width: 12px; height: 12px; border-radius: 3px; margin-right: 4px; background: var(--muted); } .swatch.approved { background: var(--ok); } .swatch.pending { background: var(--warn); } .swatch.rejected { background: var(--bad); } .swatch.running { background: var(--accent); }
+.tick-legend { display: inline-block; width: 2px; height: 12px; background: var(--text); opacity: .6; margin-right: 4px; }
+.strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.spark { width: 120px; height: 26px; display: block; }
+
+pre.code { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; overflow-x: auto; font-size: 13px; margin: 0 0 12px; }
+code { background: var(--surface-2); padding: 1px 6px; border-radius: 6px; font-size: 13px; }
+#new-api-key { width: 100%; font-family: ui-monospace, Consolas, monospace; }
+
 /* admin portal and screenshot manager */
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
 .cols > .card { min-width: 0; }

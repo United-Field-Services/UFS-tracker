@@ -352,6 +352,19 @@ test('company: a company session cannot be started while signed out, and local m
   assert.equal(f.invoke('status').sync.signedIn, false);
 });
 
+test('break pause: recorded as a break in a tracking company session, a plain pause everywhere else', async () => {
+  const f = await fixture(); f.sync.signIn({policy: {screenshotsEnabled: false}});
+  const {token} = f.prepare(); f.invoke('confirm', token);
+  const paused = f.invoke('pause', {break: true});
+  assert.equal(paused.phase, 'paused'); assert.match(paused.message, /On a break/);
+  assert.equal(paused.current.events.at(-1).kind, 'break');
+  const g = await fixture(); const t2 = g.prepare({mode: 'one-hour', intervalSeconds: 300}).token; g.invoke('confirm', t2);
+  const plain = g.invoke('pause', {break: true});
+  assert.equal(plain.current.events.at(-1).kind, 'manual'); assert.doesNotMatch(plain.message, /On a break/);
+  const h = await fixture(); h.sync.signIn({policy: {screenshotsEnabled: false}}); const t3 = h.prepare().token; h.invoke('confirm', t3);
+  assert.equal(h.invoke('pause').current.events.at(-1).kind, 'manual', 'an ordinary pause is not a break');
+});
+
 test('company: signed-in sessions are always company sessions at the policy interval; the renderer cannot override mode or interval', async () => {
   const f = await fixture(); f.sync.signIn({policy: {screenshotIntervalSeconds: 900}, projects});
   f.prepare({mode: 'manual', intervalSeconds: 10});

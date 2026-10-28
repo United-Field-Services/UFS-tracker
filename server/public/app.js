@@ -88,14 +88,19 @@ async function logout() { try { await api('POST', '/api/auth/logout'); } catch {
 // ---------- shell ----------
 const NAV = [
   ['overview', 'Overview', () => true],
+  ['team', 'Team', () => seesOthers()],
   ['admin', 'Admin portal', () => isAdmin() || (me && me.user.role === 'hr')],
+  ['timeline', 'Day view', () => true],
   ['timesheets', 'Timesheets', () => true],
   ['screenshots', 'Screenshots', () => true],
   ['reports', 'Reports', () => true],
+  ['payroll', 'Payroll', () => isAdmin() || (me && me.user.role === 'hr')],
   ['projects', 'Projects', () => isLead()],
   ['people', 'People', () => isAdmin()],
   ['policy', 'Policy', () => isAdmin()],
   ['audit', 'Audit log', () => isAdmin()],
+  ['integrations', 'Integrations', () => isAdmin()],
+  ['privacy', 'Privacy and data', () => true],
   ['account', 'My account', () => true],
 ];
 const VIEWS = {};
@@ -107,8 +112,9 @@ function renderShell() {
   const nav = h('nav', { class: 'nav', 'aria-label': 'Main' }, NAV.filter(([, , show]) => show()).map(([id, label]) => h('button', { type: 'button', 'data-view': id, 'aria-current': id === current ? 'page' : null, onclick: () => go(id, true) }, icon(id), h('span', {}, label))));
   root.append(h('div', { class: 'shell' },
     h('aside', { class: 'sidebar' }, h('div', { class: 'brand' }, h('span', { class: 'brand-mark' }, 'U'), h('div', {}, 'UFS Tracker', h('small', {}, 'TIME & ACTIVITY'))), nav,
-      h('div', { class: 'sidebar-foot' }, h('div', { class: 'small' }, h('strong', {}, me.user.name)), h('div', { class: 'small muted' }, me.user.role), h('button', { class: 'btn small', type: 'button', onclick: logout }, 'Sign out'))),
+      h('div', { class: 'sidebar-foot' }, h('button', { class: 'btn small bell', type: 'button', id: 'bell', onclick: openNotifications }, icon('bell', 16), ' Notifications ', h('span', { class: 'count hidden', id: 'bell-count' }, '0')), h('div', { class: 'small' }, h('strong', {}, me.user.name)), h('div', { class: 'small muted' }, me.user.role), h('button', { class: 'btn small', type: 'button', onclick: logout }, 'Sign out'))),
     main));
+  startBell();
   return main;
 }
 async function go(id, fromNav = false) {
@@ -391,6 +397,282 @@ VIEWS.admin = async main => {
   await load(); registerTimer(setInterval(() => load().catch(() => {}), 60000));
 };
 
+// ---------- notifications (bell in the sidebar) ----------
+let bellTimer = null, lastUnread = null;
+async function refreshBell() {
+  const el = document.getElementById('bell-count'); if (!el) return;
+  try {
+    const { unread } = await api('GET', '/api/notifications?limit=1');
+    el.textContent = unread > 99 ? '99+' : String(unread); el.classList.toggle('hidden', unread === 0);
+    if (lastUnread !== null && unread > lastUnread) toast('You have a new notification.', 'ok');
+    lastUnread = unread;
+  } catch { /* the next poll retries */ }
+}
+function startBell() { clearInterval(bellTimer); lastUnread = null; refreshBell(); bellTimer = setInterval(refreshBell, 60000); }
+async function openNotifications() {
+  const list = h('div', { class: 'notes' }); const dlg = dialog('Notifications', [list], { wide: false });
+  const markAll = h('button', { class: 'btn', type: 'button', onclick: async () => { try { await api('POST', '/api/notifications/read', { all: true }); await show(); refreshBell(); } catch (e) { dlg.fail(e); } } }, 'Mark all as read');
+  dlg.querySelector('.dialog-actions').append(markAll, h('button', { class: 'btn', type: 'button', onclick: () => dlg.close() }, 'Close'));
+  async function show() {
+    clear(list); const { notifications } = await api('GET', '/api/notifications?limit=40');
+    if (!notifications.length) { list.append(emptyState('Nothing yet.', 'Approvals, edits and requests will appear here.')); return; }
+    for (const n of notifications) {
+      const open = async () => { try { if (!n.readAt) await api('POST', '/api/notifications/read', { ids: [n.id] }); } catch { /* still navigate */ } dlg.close(); refreshBell(); if (n.link && NAV.some(([id, , showItem]) => id === n.link && showItem())) go(n.link, true); };
+      list.append(h('button', { class: `note${n.readAt ? '' : ' unread'}`, type: 'button', onclick: open }, h('strong', {}, n.title), n.body ? h('span', { class: 'small' }, n.body) : null, h('span', { class: 'muted small' }, dtShort(n.createdAt))));
+    }
+  }
+  try { await show(); } catch (e) { dlg.fail(e); }
+}
+
+// ---------- payroll ----------
+VIEWS.payroll = async main => {
+  const canSet = isAdmin(); const range = rangeControls(30);
+  const ratesHost = h('div', { class: 'card' }), exportHost = h('div', {});
+  const loadRates = async () => {
+    clear(ratesHost); const { people } = await api('GET', '/api/payroll/rates');
+    ratesHost.append(h('h2', {}, 'Pay rates'), h('p', { class: 'muted small' }, 'Hourly rates by effective date. The rate in force on the day an entry started is used. Only owners and admins can change rates; HR can view them. Changes are audited (the amounts are not copied into the audit log).'),
+      h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Person', 'Role', 'Current rate', 'Changes', ''].map(t => h('th', {}, t)))),
+        h('tbody', {}, people.map(p => h('tr', {}, h('td', {}, p.name), h('td', {}, p.role), h('td', {}, p.current ? `${p.current.hourlyRate} ${p.current.currency}/h (from ${p.current.effectiveFrom})` : h('span', { class: 'muted' }, 'Not set')), h('td', { class: 'num' }, p.changes), h('td', { class: 'actions-cell' }, canSet ? h('button', { class: 'btn small', type: 'button', onclick: () => rateDialog(p) }, 'Set rate') : null)))))));
+  };
+  const rateDialog = p => {
+    const rate = h('input', { type: 'number', min: '0', max: '10000', step: '0.01', required: true, value: p.current?.hourlyRate ?? '' });
+    const currency = h('input', { type: 'text', maxlength: '3', value: p.current?.currency ?? 'USD', style: 'text-transform:uppercase' });
+    const from = h('input', { type: 'date', value: new Date().toISOString().slice(0, 10) }); // rates and payroll use UTC dates
+    const dlg = dialog(`Pay rate for ${p.name}`, [h('p', { class: 'muted small' }, 'A new rate applies to time that starts on or after the date (UTC). Earlier approved time keeps its earlier rate.'), h('div', { class: 'field-row' }, field('Hourly rate', rate), field('Currency (3 letters)', currency)), field('Effective from (UTC date)', from)]);
+    dlg.querySelector('.dialog-actions').append(cancelButton(dlg), h('button', { class: 'btn primary', type: 'button', onclick: async () => { try { await api('POST', '/api/payroll/rates', { userId: p.userId, hourlyRate: Number(rate.value), currency: currency.value.toUpperCase(), effectiveFrom: from.value }); dlg.close(); toast('Pay rate saved.'); await loadRates(); } catch (e) { dlg.fail(e); } } }, 'Save rate'));
+  };
+  const preview = async () => {
+    clear(exportHost); const { from, to } = range.get();
+    const r = await api('GET', `/api/payroll/export?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+    exportHost.append(h('div', { class: 'card' }, h('h2', {}, `Payroll preview · ${r.people.length} people`),
+      r.missingRateCount ? h('div', { class: 'banner warn' }, `${r.missingRateCount} ${r.missingRateCount === 1 ? 'person has' : 'people have'} approved time but no pay rate for it.`) : null,
+      h('div', { class: 'stats' }, ...Object.entries(r.totals).map(([c, v]) => stat(`Total (${c})`, v)), stat('People with approved time', String(r.people.filter(x => x.approvedHours > 0).length))),
+      h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Person', 'Approved hours', 'Rate', 'Amount', 'Pending hours (not included)'].map((t, i) => h('th', { class: i && i !== 2 ? 'num' : '' }, t)))),
+        h('tbody', {}, r.people.map(l => h('tr', {}, h('td', {}, l.name), h('td', { class: 'num' }, l.approvedHours), h('td', {}, l.lines.length ? l.lines.map(x => `${x.hourlyRate} ${x.currency}`).join(', ') : h('span', { class: 'muted' }, l.missingRate ? 'No rate' : '—')), h('td', { class: 'num' }, l.lines.length ? l.lines.map(x => `${x.amount} ${x.currency}`).join(' + ') : '—'), h('td', { class: 'num muted' }, l.pendingHours)))))),
+      h('p', { class: 'muted small' }, r.note)));
+  };
+  const csv = async () => { const { from, to } = range.get(); await download(`/api/payroll/export?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=csv`, 'payroll-export.csv'); toast('CSV downloaded. This export is recorded in the audit log.'); };
+  main.append(pageHead('Payroll', 'Approved time multiplied by the pay rates below. A working sheet, not payroll advice.', ...range.nodes, h('button', { class: 'btn primary', type: 'button', onclick: () => preview().catch(e => showError(main, e)) }, 'Preview'), h('button', { class: 'btn', type: 'button', onclick: () => csv().catch(e => showError(main, e)) }, 'Download CSV')), exportHost, ratesHost);
+  await loadRates(); await preview().catch(e => showError(main, e));
+};
+
+// ---------- privacy and my data ----------
+VIEWS.privacy = async main => {
+  main.append(pageHead('Privacy and my data', 'See, download or ask to delete what this tracker holds about you.'));
+  const mine = h('div', { class: 'card' });
+  const loadMine = async () => {
+    clear(mine); const { requests } = await api('GET', '/api/me/data-requests');
+    const open = requests.find(x => x.status === 'open');
+    mine.append(h('h2', {}, 'My data'), h('p', { class: 'muted small' }, 'The download is a JSON file with your profile, time entries, daily activity counts (if enabled), screenshot list, devices and who has looked at your screenshots and activity. Screenshot images are downloaded from the Screenshots page.'),
+      h('div', { class: 'actions' }, h('button', { class: 'btn primary', type: 'button', onclick: async () => { try { await download('/api/me/export', `my-tracker-data-${dateInputValue(new Date())}.json`); toast('Your data was downloaded.'); } catch (e) { showError(main, e); } } }, 'Download my data'),
+        h('button', { class: 'btn', type: 'button', disabled: !!open, onclick: requestDialog }, open ? 'Deletion request pending' : 'Ask to delete my screenshots and activity data')),
+      h('p', { class: 'muted small' }, 'Deleting removes your screenshots and keyboard/mouse counts. Your time entries stay because payroll depends on them. An administrator reviews the request.'),
+      requests.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Requested', 'Status', 'Decision'].map(t => h('th', {}, t)))), h('tbody', {}, requests.map(x => h('tr', {}, h('td', {}, dtShort(x.createdAt)), h('td', {}, badge(x.status, x.status === 'fulfilled' ? 'ok' : x.status === 'declined' ? 'bad' : 'warn')), h('td', { class: 'wrap' }, x.resolutionNote || (x.resolvedAt ? `Resolved ${dtShort(x.resolvedAt)}` : 'Waiting for an administrator'))))))) : null);
+  };
+  const requestDialog = () => {
+    const text = h('textarea', { maxlength: '500', placeholder: 'Optional: tell the administrator why' });
+    const dlg = dialog('Ask to delete my screenshots and activity data', [h('p', { class: 'muted small' }, 'Your time entries are kept for payroll. An administrator will review this and you will be notified.'), field('Note', text)]);
+    dlg.querySelector('.dialog-actions').append(cancelButton(dlg), h('button', { class: 'btn danger', type: 'button', onclick: async () => { try { await api('POST', '/api/me/data-requests', { note: text.value || undefined }); dlg.close(); toast('Request sent.'); await loadMine(); } catch (e) { dlg.fail(e); } } }, 'Send request'));
+  };
+  main.append(mine); await loadMine();
+  if (isAdmin() || me.user.role === 'hr') {
+    const queue = h('div', { class: 'card' }); main.append(queue);
+    const loadQueue = async () => {
+      clear(queue); const { requests } = await api('GET', '/api/admin/data-requests');
+      queue.append(h('h2', {}, `Deletion requests (${requests.filter(x => x.status === 'open').length} open)`));
+      if (!requests.length) { queue.append(emptyState('No deletion requests.')); return; }
+      queue.append(h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Person', 'Requested', 'Note', 'Status', ''].map(t => h('th', {}, t)))),
+        h('tbody', {}, requests.map(x => h('tr', {}, h('td', {}, x.userName), h('td', {}, dtShort(x.createdAt)), h('td', { class: 'wrap' }, x.note || '—'), h('td', {}, badge(x.status, x.status === 'fulfilled' ? 'ok' : x.status === 'declined' ? 'bad' : 'warn')),
+          h('td', { class: 'actions-cell' }, x.status === 'open' && isAdmin() ? h('div', { class: 'actions' }, h('button', { class: 'btn small danger', type: 'button', onclick: () => resolve(x, 'fulfil') }, 'Delete data'), h('button', { class: 'btn small', type: 'button', onclick: () => resolve(x, 'decline') }, 'Decline')) : null)))))));
+    };
+    const resolve = (x, action) => {
+      const note = h('textarea', { maxlength: '300', placeholder: action === 'decline' ? 'Why is this declined? (the person is told)' : 'Optional note' });
+      const dlg = dialog(action === 'fulfil' ? `Delete ${x.userName}'s screenshots and activity data?` : 'Decline this request', [h('p', { class: action === 'fulfil' ? '' : 'muted small' }, action === 'fulfil' ? 'Screenshots and keyboard/mouse counts are removed for good. Time entries stay. This is recorded in the audit log.' : 'The person will see your reason.'), field('Note', note)]);
+      dlg.querySelector('.dialog-actions').append(cancelButton(dlg), h('button', { class: `btn ${action === 'fulfil' ? 'danger' : 'primary'}`, type: 'button', onclick: async () => { try { const r = await api('POST', `/api/admin/data-requests/${x.id}/resolve`, { action, note: note.value || undefined }); dlg.close(); toast(action === 'fulfil' ? `Deleted ${r.removed.screenshots} screenshots and ${r.removed.activitySlices} activity samples.` : 'Request declined.'); await loadQueue(); } catch (e) { dlg.fail(e); } } }, action === 'fulfil' ? 'Delete permanently' : 'Decline request'));
+    };
+    await loadQueue();
+  }
+};
+
+// ---------- day view (timeline) ----------
+let timelineTarget = null; // { userId, date } set by links from other pages
+const addDays = (dateText, n) => { const d = new Date(`${dateText}T12:00:00`); d.setDate(d.getDate() + n); return dateInputValue(d); };
+
+/** 24-hour bar: one block per time entry (coloured by approval status) and a tick for every screenshot. */
+function dayBar(t) {
+  const W = 960, H = 100, padL = 8, padR = 8, start = Date.parse(t.dayStartAt), span = Date.parse(t.dayEndAt) - start, inner = W - padL - padR;
+  const x = ms => padL + Math.min(1, Math.max(0, (ms - start) / span)) * inner;
+  const chart = svg('svg', { viewBox: `0 0 ${W} ${H}`, class: 'chart daybar', role: 'img', 'aria-label': `${t.person.name} on ${t.date}: ${t.entries.length} time blocks, ${dur(t.totals.trackedMs)} tracked${t.screenshots ? `, ${t.screenshots.length} screenshots` : ''}` });
+  for (let hour = 0; hour <= 24; hour += 3) { const gx = padL + inner * hour / 24; chart.append(svg('line', { x1: gx, x2: gx, y1: 8, y2: 52, class: 'grid-line' }), svg('text', { x: gx, y: 86, class: 'axis', 'text-anchor': hour === 0 ? 'start' : hour === 24 ? 'end' : 'middle' }, document.createTextNode(`${String(hour % 24).padStart(2, '0')}:00`))); }
+  for (const e of t.entries) {
+    const from = Date.parse(e.startAt), to = e.endAt ? Date.parse(e.endAt) : Math.min(Date.parse(t.dayEndAt), Date.now());
+    chart.append(svg('rect', { x: x(from), y: 14, width: Math.max(3, x(to) - x(from)), height: 30, rx: 4, class: `block ${e.running ? 'running' : e.status}` }, svg('title', {}, document.createTextNode(`${timeOnly(e.startAt)}${e.endAt ? ' – ' + timeOnly(e.endAt) : ' – running'} · ${dur(e.trackedMs)} · ${e.status}${e.projectName ? ' · ' + e.projectName : ''}`))));
+  }
+  for (const b of t.breaks || []) { const from = Date.parse(b.startAt), to = b.endAt ? Date.parse(b.endAt) : Math.min(Date.parse(t.dayEndAt), Date.now()); chart.append(svg('rect', { x: x(from), y: 10, width: Math.max(3, x(to) - x(from)), height: 38, rx: 3, class: 'break' }, svg('title', {}, document.createTextNode(`Break ${timeOnly(b.startAt)}${b.endAt ? ' – ' + timeOnly(b.endAt) : ' – still going'}`)))); }
+  for (const s of t.screenshots || []) chart.append(svg('line', { x1: x(Date.parse(s.takenAt)), x2: x(Date.parse(s.takenAt)), y1: 48, y2: 58, class: 'shot-tick' }, svg('title', {}, document.createTextNode(`Screenshot at ${timeOnly(s.takenAt)}`))));
+  return chart;
+}
+
+VIEWS.timeline = async main => {
+  const { users, options } = await userOptions(false);
+  const target = timelineTarget || { userId: me.user.id, date: dateInputValue(new Date()) }; timelineTarget = null;
+  const person = select(options, users.some(u => u.id === target.userId) ? target.userId : me.user.id);
+  const dateInput = h('input', { type: 'date', value: target.date });
+  const host = h('div', {});
+  const imgObserver = new IntersectionObserver(items => items.forEach(async item => {
+    if (!item.isIntersecting) return; imgObserver.unobserve(item.target);
+    try { item.target.src = await blobUrl(`/api/screenshots/${item.target.dataset.id}/${item.target.dataset.thumb === '1' ? 'thumb' : 'image'}`); } catch { item.target.alt = 'Image unavailable'; }
+  }), { rootMargin: '150px' });
+  const viewShot = async (s, name) => {
+    const img = h('img', { class: 'full', alt: `Screenshot at ${dtShort(s.takenAt)}` });
+    const dlg = dialog(`${name} · ${dtShort(s.takenAt)}`, [img, h('p', { class: 'muted small' }, `${s.width} × ${s.height} px · ${s.format.toUpperCase()} · ${bytesLabel(s.bytes)}`)], { wide: true });
+    dlg.querySelector('.dialog-actions').append(h('button', { class: 'btn', type: 'button', onclick: () => dlg.close() }, 'Close'));
+    try { img.src = await blobUrl(`/api/screenshots/${s.id}/image`); } catch (e) { dlg.fail(e); }
+  };
+  let loadSeq = 0; // a newer request wins: rapid date changes must not append two pages
+  const load = async () => {
+    const mine = ++loadSeq; clear(host);
+    const t = await api('GET', `/api/timeline?userId=${encodeURIComponent(person.value)}&date=${dateInput.value}&tzOffsetMinutes=${tzOffset()}`);
+    if (mine !== loadSeq) return;
+    host.append(h('div', { class: 'stats' }, stat('Tracked', dur(t.totals.trackedMs)), stat('Idle (estimate)', dur(t.totals.idleMs)), stat('First start', t.totals.firstStartAt ? timeOnly(t.totals.firstStartAt) : '—'), stat('Last stop', t.totals.lastEndAt ? timeOnly(t.totals.lastEndAt) : '—'), stat('Time blocks', String(t.totals.entries)), stat('Breaks', t.totals.breaks ? `${t.totals.breaks} · ${dur(t.totals.breakMs)}` : '0'), stat('Awaiting approval', String(t.totals.pending)), stat('Screenshots', t.totals.screenshots === null ? 'hidden' : String(t.totals.screenshots))));
+    host.append(h('div', { class: 'card' }, h('h2', {}, `${t.person.name} · ${dayLabel(t.dayStartAt)}`),
+      t.entries.length ? [dayBar(t), h('div', { class: 'legend small muted' }, h('span', { class: 'swatch approved' }), 'Approved', h('span', { class: 'swatch pending' }), 'Waiting', h('span', { class: 'swatch rejected' }), 'Rejected', h('span', { class: 'swatch running' }), 'Running', h('span', { class: 'swatch break' }), 'Break', h('span', { class: 'tick-legend' }), 'Screenshot')] : emptyState('No tracked time on this day.', 'Pick another day with the arrows above.')));
+    if (t.activity) {
+      const rows = t.activity.hours.map(x => ({ label: `${String(x.hour).padStart(2, '0')}`, value: Math.round(x.activeSeconds / 6) / 10, title: `${String(x.hour).padStart(2, '0')}:00: about ${Math.round(x.activeSeconds / 60)} min with input out of ${Math.round(x.sampledSeconds / 60)} min sampled (${x.keyDownCount} key-downs, ${x.mouseClickCount} clicks)` }));
+      host.append(h('div', { class: 'card' }, h('h2', {}, 'Estimated minutes with keyboard or mouse input, per hour'), barChart(rows, { label: 'Estimated minutes with input per hour', format: v => `${Math.round(v)}m` }), h('p', { class: 'muted small' }, t.activity.note)));
+    }
+    if (t.screenshotsHidden) host.append(h('div', { class: 'banner info' }, 'This person\'s screenshots are visible to them only (organization policy).'));
+    else if (t.screenshots.length) {
+      const grid = h('div', { class: 'strip' });
+      for (const s of t.screenshots) { const img = h('img', { class: 'img', alt: `Screenshot at ${dtShort(s.takenAt)}`, 'data-id': s.id, 'data-thumb': s.hasThumb ? '1' : '0' }); grid.append(h('button', { class: 'shot', type: 'button', onclick: () => viewShot(s, t.person.name) }, img, h('div', { class: 'cap' }, timeOnly(s.takenAt)))); imgObserver.observe(img); }
+      host.append(h('div', { class: 'card' }, h('h2', {}, `Screenshots (${t.screenshots.length})`), h('p', { class: 'muted small' }, 'Viewing someone else\'s screenshot is recorded in the audit log.'), grid));
+    }
+    if (t.breaks && t.breaks.length) host.append(h('div', { class: 'card' }, h('h2', {}, 'Breaks'), h('p', { class: 'muted small' }, 'Pauses the person chose as a break in the desktop app. Break time is not counted as tracked time.'), h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['From', 'To', 'Length'].map((x, i) => h('th', { class: i === 2 ? 'num' : '' }, x)))), h('tbody', {}, t.breaks.map(b => h('tr', {}, h('td', {}, timeOnly(b.startAt)), h('td', {}, b.endAt ? timeOnly(b.endAt) : badge('still going', 'info')), h('td', { class: 'num' }, dur((b.endAt ? Date.parse(b.endAt) : Date.now()) - Date.parse(b.startAt))))))))));
+    if (t.entries.length) host.append(h('div', { class: 'card' }, h('h2', {}, 'Time blocks'), h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['From', 'To', 'Project / task', 'Tracked', 'Idle (est.)', 'Status'].map((x, i) => h('th', { class: i === 3 || i === 4 ? 'num' : '' }, x)))),
+      h('tbody', {}, t.entries.map(e => h('tr', {}, h('td', {}, timeOnly(e.startAt)), h('td', {}, e.endAt ? timeOnly(e.endAt) : 'running'), h('td', { class: 'wrap' }, [e.projectName, e.taskLabel].filter(Boolean).join(' · ') || '—'), h('td', { class: 'num' }, dur(e.trackedMs)), h('td', { class: 'num muted' }, dur(e.idleMs)), h('td', {}, e.running ? badge('running', 'info') : statusBadge(e.status)))))))));
+  };
+  const go1 = () => load().catch(e => showError(main, e));
+  const step = n => () => { dateInput.value = addDays(dateInput.value, n); go1(); };
+  main.append(pageHead('Day view', 'One person, one day: when they tracked, what was captured and the count-only activity estimate.',
+    users.length > 1 ? h('label', {}, 'Person', person) : null, h('button', { class: 'btn', type: 'button', id: 'day-prev', onclick: step(-1) }, '← Previous'), h('label', {}, 'Day', dateInput), h('button', { class: 'btn', type: 'button', id: 'day-next', onclick: step(1) }, 'Next →'), h('button', { class: 'btn', type: 'button', onclick: () => { dateInput.value = dateInputValue(new Date()); go1(); } }, 'Today'), h('button', { class: 'btn primary', type: 'button', onclick: go1 }, 'Show')), host);
+  person.addEventListener('change', go1); dateInput.addEventListener('change', go1);
+  await load();
+};
+
+// ---------- team ----------
+VIEWS.team = async main => {
+  const days = select([['7', 'Last 7 days'], ['14', 'Last 14 days'], ['31', 'Last 31 days']], '7');
+  const sort = select([['name', 'Sort by name'], ['hours', 'Most tracked time'], ['pending', 'Most approvals waiting']], 'name');
+  const host = h('div', {}); let data = null;
+  const spark = person => {
+    const max = Math.max(1, ...person.daily.map(d => d.trackedMs)), w = 120, hh = 26, bw = w / person.daily.length;
+    const chart = svg('svg', { viewBox: `0 0 ${w} ${hh}`, class: 'spark', role: 'img', 'aria-label': `${person.name}: ${person.daily.map(d => dur(d.trackedMs)).join(', ')}` });
+    person.daily.forEach((d, i) => chart.append(svg('rect', { x: i * bw + 1, y: hh - Math.max(d.trackedMs > 0 ? 2 : 0, hh * d.trackedMs / max), width: Math.max(2, bw - 2), height: Math.max(d.trackedMs > 0 ? 2 : 0, hh * d.trackedMs / max), rx: 1.5, class: 'bar-fill-svg' }, svg('title', {}, document.createTextNode(`${shortDay(d.date)}: ${dur(d.trackedMs)}`)))));
+    return chart;
+  };
+  const render = () => {
+    clear(host); if (!data) return;
+    const people = [...data.people].sort((a, b) => sort.value === 'hours' ? b.trackedMs - a.trackedMs : sort.value === 'pending' ? b.pendingApprovals - a.pendingApprovals : a.name.localeCompare(b.name));
+    host.append(h('div', { class: 'stats' }, stat('People', String(people.length)), stat('Tracking now', String(data.totals.tracking)), stat(`Tracked, last ${data.days} days`, dur(data.totals.trackedMs)), stat('Approvals waiting', String(data.totals.pending))));
+    host.append(h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Person', 'Status', `Per day (${data.days} d)`, 'Tracked', 'Breaks', 'Idle (est.)', 'Days tracked', 'Approvals', 'Screenshots', ''].map((x, i) => h('th', { class: i >= 3 && i <= 8 ? 'num' : '' }, x)))),
+      h('tbody', {}, people.map(p => h('tr', {}, h('td', {}, h('strong', {}, p.name), p.team ? h('span', { class: 'muted small' }, ` · ${p.team}`) : null), h('td', {}, h('span', { class: `dot ${p.state}` }), p.state === 'tracking' ? 'Tracking' : p.state === 'paused' ? 'Paused' : 'Offline'), h('td', {}, spark(p)),
+        h('td', { class: 'num' }, dur(p.trackedMs)), h('td', { class: 'num' }, p.breaks ? `${p.breaks} · ${dur(p.breakMs)}` : '—'), h('td', { class: 'num muted' }, p.trackedMs ? `${Math.round(p.idleMs / p.trackedMs * 100)}%` : '—'), h('td', { class: 'num' }, `${p.activeDays}/${data.days}`), h('td', { class: 'num' }, p.pendingApprovals ? badge(String(p.pendingApprovals), 'warn') : '0'), h('td', { class: 'num' }, p.screenshots === null ? h('span', { class: 'muted', title: 'Visible to the person only (policy)' }, 'hidden') : p.screenshots),
+        h('td', { class: 'actions-cell' }, h('button', { class: 'btn small', type: 'button', onclick: () => { timelineTarget = { userId: p.userId, date: dateInputValue(new Date()) }; go('timeline', true); } }, 'Day view'))))))),
+      h('p', { class: 'muted small' }, data.note)));
+  };
+  const load = async () => { data = await api('GET', `/api/team/summary?days=${days.value}&tzOffsetMinutes=${tzOffset()}`); render(); };
+  main.append(pageHead('Team', 'Tracked time, status and approvals for the people you can see. Facts only: no scores or rankings of work quality.', h('label', {}, 'Period', days), h('label', {}, 'Order', sort), h('button', { class: 'btn primary', type: 'button', onclick: () => load().catch(e => showError(main, e)) }, 'Refresh')), host);
+  days.addEventListener('change', () => load().catch(e => showError(main, e))); sort.addEventListener('change', render);
+  await load(); registerTimer(setInterval(() => load().catch(() => {}), 30000));
+};
+
+// ---------- integrations (API keys) ----------
+VIEWS.integrations = async main => {
+  const host = h('div', {});
+  const SCOPE_LABELS = { 'users:read': 'People (name, email, role, manager, team)', 'projects:read': 'Projects and tasks', 'time:read': 'Time entries (hours only)' };
+  const load = async () => {
+    clear(host); const { keys, scopes } = await api('GET', '/api/admin/api-keys');
+    const active = keys.filter(k => !k.revokedAt);
+    host.append(h('div', { class: 'card' }, h('h2', {}, 'API keys'),
+      h('p', { class: 'muted small' }, 'Keys let another system read people, projects and approved hours through a read-only API. Keys never expose screenshots, activity counts, breaks or pay. Each key is shown once; only a hash is stored. Revoke a key to stop it immediately.'),
+      active.length || keys.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Name', 'Key', 'Access', 'Created', 'Last used', 'Status', ''].map(t => h('th', {}, t)))),
+        h('tbody', {}, keys.map(k => h('tr', {}, h('td', {}, h('strong', {}, k.name)), h('td', {}, h('code', {}, `${k.prefix}…`)), h('td', { class: 'wrap' }, k.scopes.join(', ')), h('td', {}, `${dtShort(k.createdAt)}${k.createdBy ? ` · ${k.createdBy}` : ''}`), h('td', { class: 'muted' }, k.lastUsedAt ? dtShort(k.lastUsedAt) : 'Never'), h('td', {}, k.revokedAt ? badge('revoked', 'bad') : badge('active', 'ok')),
+          h('td', { class: 'actions-cell' }, k.revokedAt ? null : h('button', { class: 'btn small danger', type: 'button', onclick: () => revoke(k) }, 'Revoke'))))))) : emptyState('No API keys yet.', 'Create one for a payroll, HR or reporting system.'),
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => createDialog(scopes) }, 'Create API key'))));
+    host.append(h('div', { class: 'card' }, h('h2', {}, 'Using the API'),
+      h('p', { class: 'muted small' }, 'Send the key as a bearer token. Read-only; 300 requests per 5 minutes per key. Times are UTC.'),
+      h('pre', { class: 'code' }, `curl -H "Authorization: Bearer <your key>" ${location.origin}/api/v1/time-entries?status=approved&limit=200`),
+      h('dl', { class: 'facts' }, ...[['GET /api/v1/me', 'Check the key and its access'], ['GET /api/v1/users', 'Active people (users:read)'], ['GET /api/v1/projects', 'Projects and their tasks (projects:read)'], ['GET /api/v1/time-entries', 'Finished entries; filters from, to, userId, status (approved by default), limit, after for the next page (time:read)']].flatMap(([k, v]) => [h('dt', {}, h('code', {}, k)), h('dd', {}, v)])),
+      h('p', { class: 'muted small' }, 'To be pushed changes instead of asking for them, use Webhooks below.')));
+  };
+  const createDialog = scopes => {
+    const name = h('input', { type: 'text', maxlength: '80', required: true, placeholder: 'e.g. Payroll sync' });
+    const boxes = scopes.map(s => h('input', { type: 'checkbox', value: s, checked: s !== 'users:read' ? s === 'time:read' : false, id: `scope-${s}` }));
+    const dlg = dialog('Create API key', [field('Name', name), h('p', { class: 'small' }, h('strong', {}, 'Access')), ...scopes.map((s, i) => h('label', { class: 'check' }, boxes[i], SCOPE_LABELS[s] || s))]);
+    dlg.querySelector('.dialog-actions').append(cancelButton(dlg), h('button', { class: 'btn primary', type: 'button', onclick: async () => {
+      try { const chosen = boxes.filter(b => b.checked).map(b => b.value); const r = await api('POST', '/api/admin/api-keys', { name: name.value, scopes: chosen }); dlg.close(); showKey(r.key, r.note); await load(); } catch (e) { dlg.fail(e); }
+    } }, 'Create key'));
+  };
+  const showKey = (key, note) => {
+    const box = h('input', { type: 'text', readonly: true, value: key, id: 'new-api-key', 'aria-label': 'New API key' });
+    const dlg = dialog('Your new API key', [h('p', { class: 'banner warn' }, note), box, h('p', { class: 'muted small' }, 'Store it in the other system\'s secret settings, never in code or chat.')]);
+    dlg.querySelector('.dialog-actions').append(h('button', { class: 'btn', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(key); toast('Key copied.'); } catch { box.select(); toast('Select the key and copy it.', 'warn'); } } }, 'Copy'), h('button', { class: 'btn primary', type: 'button', onclick: () => dlg.close() }, 'I have saved it'));
+    box.addEventListener('focus', () => box.select());
+  };
+  const revoke = k => {
+    const dlg = dialog(`Revoke "${k.name}"?`, [h('p', {}, 'Any system using this key stops working immediately. This cannot be undone.')]);
+    dlg.querySelector('.dialog-actions').append(cancelButton(dlg), h('button', { class: 'btn danger', type: 'button', onclick: async () => { try { await api('DELETE', `/api/admin/api-keys/${k.id}`); dlg.close(); toast('Key revoked.'); await load(); } catch (e) { dlg.fail(e); } } }, 'Revoke key'));
+  };
+  // ---- webhooks ----
+  const hooksHost = h('div', {});
+  const loadHooks = async () => {
+    clear(hooksHost); const { webhooks, events } = await api('GET', '/api/admin/webhooks');
+    hooksHost.append(h('div', { class: 'card', id: 'webhook-card' }, h('h2', {}, 'Webhooks'),
+      h('p', { class: 'muted small' }, 'A webhook sends a signed message to another system when something happens (for example when time is approved). Messages carry ids, times and statuses only, never names, emails, screenshots, activity or pay. Targets must be public https addresses.'),
+      webhooks.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Name', 'Address', 'Events', 'Status', 'Last delivery', ''].map(t => h('th', {}, t)))),
+        h('tbody', {}, webhooks.map(w => h('tr', {}, h('td', {}, h('strong', {}, w.name)), h('td', { class: 'truncate', title: w.url }, (() => { try { const u = new URL(w.url); return `${u.host}${u.pathname}`; } catch { return w.url; } })()), h('td', { class: 'wrap' }, w.events.join(', ')),
+          h('td', {}, w.active ? badge('on', 'ok') : badge('off', 'bad'), w.disabledReason ? h('div', { class: 'muted small' }, w.disabledReason) : null),
+          h('td', {}, w.last ? [badge(w.last.status, w.last.status === 'delivered' ? 'ok' : w.last.status === 'failed' ? 'bad' : 'warn'), h('div', { class: 'muted small' }, `${dtShort(w.last.at)}${w.last.error ? ` · ${w.last.error}` : ''}`)] : h('span', { class: 'muted' }, 'None yet'), w.pending ? h('div', { class: 'muted small' }, `${w.pending} waiting to retry`) : null),
+          h('td', { class: 'actions-cell' }, h('div', { class: 'actions' }, h('button', { class: 'btn small', type: 'button', disabled: !w.active, onclick: () => sendTest(w) }, 'Send test'), rowMenu([{ label: 'Deliveries', onclick: () => showDeliveries(w) }, { label: w.active ? 'Turn off' : 'Turn on', onclick: () => toggle(w) }, { label: 'New signing secret', onclick: () => rotate(w) }, { label: 'Delete', danger: true, onclick: () => remove(w) }])))))))) : emptyState('No webhooks yet.', 'Add one to be told when time is approved, rejected, submitted or edited.'),
+      h('div', { class: 'dialog-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => createHook(events) }, 'Add webhook')),
+      h('details', {}, h('summary', { class: 'small' }, 'How to verify a message'), h('pre', { class: 'code' }, 'X-UFS-Signature: sha256=HMAC_SHA256(secret, X-UFS-Timestamp + "." + raw request body)\nReject messages whose timestamp is more than 5 minutes old.\nAnswer with any 2xx within 10 seconds. Failed deliveries retry after 1 min, 5 min, 30 min, 2 h and 12 h; a hook that keeps failing is switched off.'))));
+  };
+  const createHook = events => {
+    const name = h('input', { type: 'text', maxlength: '80', required: true, placeholder: 'e.g. Payroll system' }); const url = h('input', { type: 'text', maxlength: '500', required: true, placeholder: 'https://example.com/hooks/ufs', autocomplete: 'off' });
+    const boxes = events.map(e => h('input', { type: 'checkbox', value: e, checked: e === 'time.approved' }));
+    const dlg = dialog('Add webhook', [field('Name', name), field('Address (https, public host)', url), h('p', { class: 'small' }, h('strong', {}, 'Send me')), ...events.map((e, i) => h('label', { class: 'check' }, boxes[i], e))]);
+    dlg.querySelector('.dialog-actions').append(cancelButton(dlg), h('button', { class: 'btn primary', type: 'button', onclick: async () => {
+      try { const r = await api('POST', '/api/admin/webhooks', { name: name.value, url: url.value, events: boxes.filter(b => b.checked).map(b => b.value) }); dlg.close(); showSecret(r.secret, r.note); await loadHooks(); } catch (e) { dlg.fail(e); }
+    } }, 'Add webhook'));
+  };
+  const showSecret = (secret, note) => {
+    const box = h('input', { type: 'text', readonly: true, value: secret, id: 'new-webhook-secret', 'aria-label': 'Signing secret' });
+    const dlg = dialog('Signing secret', [h('p', { class: 'banner warn' }, note), box, h('p', { class: 'muted small' }, 'The other system uses it to check that a message really came from here.')]);
+    dlg.querySelector('.dialog-actions').append(h('button', { class: 'btn', type: 'button', onclick: async () => { try { await navigator.clipboard.writeText(secret); toast('Secret copied.'); } catch { box.select(); toast('Select the secret and copy it.', 'warn'); } } }, 'Copy'), h('button', { class: 'btn primary', type: 'button', onclick: () => dlg.close() }, 'I have saved it'));
+    box.addEventListener('focus', () => box.select());
+  };
+  const sendTest = async w => { try { const r = await api('POST', `/api/admin/webhooks/${w.id}/test`); toast(r.webhook.last?.status === 'delivered' ? 'Test delivered.' : `Test not delivered: ${r.webhook.last?.error || 'no answer'}`, r.webhook.last?.status === 'delivered' ? 'ok' : 'warn'); await loadHooks(); } catch (e) { showError(main, e); } };
+  const toggle = async w => { try { await api('PATCH', `/api/admin/webhooks/${w.id}`, { active: !w.active }); toast(w.active ? 'Webhook turned off.' : 'Webhook turned on.'); await loadHooks(); } catch (e) { showError(main, e); } };
+  const rotate = w => {
+    const dlg = dialog(`New signing secret for "${w.name}"?`, [h('p', {}, 'The old secret stops working immediately. Update the other system right after copying the new one.')]);
+    dlg.querySelector('.dialog-actions').append(cancelButton(dlg), h('button', { class: 'btn primary', type: 'button', onclick: async () => { try { const r = await api('POST', `/api/admin/webhooks/${w.id}/rotate-secret`); dlg.close(); showSecret(r.secret, r.note); } catch (e) { dlg.fail(e); } } }, 'Create new secret'));
+  };
+  const remove = w => {
+    const dlg = dialog(`Delete "${w.name}"?`, [h('p', {}, 'Its delivery history is deleted with it. This cannot be undone.')]);
+    dlg.querySelector('.dialog-actions').append(cancelButton(dlg), h('button', { class: 'btn danger', type: 'button', onclick: async () => { try { await api('DELETE', `/api/admin/webhooks/${w.id}`); dlg.close(); toast('Webhook deleted.'); await loadHooks(); } catch (e) { dlg.fail(e); } } }, 'Delete webhook'));
+  };
+  const showDeliveries = async w => {
+    const body = h('div', {}); const dlg = dialog(`Deliveries to "${w.name}"`, [body], { wide: true });
+    dlg.querySelector('.dialog-actions').append(h('button', { class: 'btn', type: 'button', onclick: () => dlg.close() }, 'Close'));
+    try {
+      const { deliveries } = await api('GET', `/api/admin/webhooks/${w.id}/deliveries`);
+      body.append(deliveries.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['When', 'Event', 'Result', 'Attempts', 'Detail'].map(t => h('th', {}, t)))), h('tbody', {}, deliveries.map(d => h('tr', {}, h('td', {}, dtShort(d.createdAt)), h('td', {}, d.event), h('td', {}, badge(d.status, d.status === 'delivered' ? 'ok' : d.status === 'failed' ? 'bad' : 'warn')), h('td', { class: 'num' }, d.attempts), h('td', { class: 'wrap muted small' }, d.error || (d.httpStatus ? `HTTP ${d.httpStatus}` : d.nextAttemptAt ? `Next try ${dtShort(d.nextAttemptAt)}` : ''))))))) : emptyState('No deliveries yet.'));
+    } catch (e) { dlg.fail(e); }
+  };
+  main.append(pageHead('Integrations', 'Connect other systems: read people, projects and approved hours, or be told when time changes.'), host, hooksHost);
+  await load(); await loadHooks();
+};
+
 // ---------- reports ----------
 VIEWS.reports = async main => {
   const { users, options } = await userOptions(); const range = rangeControls(7);
@@ -607,6 +889,25 @@ VIEWS.account = async main => {
     h('li', {}, `Time tracked, and an estimate of idle time (no keyboard or mouse input). ${me.policy.activityTrackingEnabled ? 'Keyboard key-down and mouse-click counts and active seconds per minute are also enabled; no key identity, text or mouse position is stored.' : 'Keyboard and mouse counts are off.'}`), h('li', {}, `Screenshots are deleted after ${me.policy.retentionDays} days. ${me.policy.screenshotVisibility === 'employee_only' ? 'Only you can view them.' : 'You, your direct manager and HR can view them.'}`),
     h('li', {}, me.policy.breakReminderMinutes ? `The desktop may remind you to take a break after ${me.policy.breakReminderMinutes} tracked minutes. You decide whether to pause; reminders do not change your time.` : 'Break reminders are off.', me.policy.workScheduleEnabled ? ` Scheduled-hour reminders use ${me.policy.workDays.map(day => ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][day]).join(', ')} ${me.policy.workStartLocal}–${me.policy.workEndLocal} in your device local time while the app is open.` : ' Scheduled-hour reminders are off.'),
     h('li', {}, 'Not recorded: audio, camera, keystrokes, or which apps or websites you use.'))));
+  const reportCard = h('div', { class: 'card', id: 'report-card' }); main.append(reportCard);
+  const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const loadReports = async () => {
+    clear(reportCard); const { subscriptions, available, emailDelivery } = await api('GET', '/api/report-subscriptions');
+    const kind = select(available.map(a => [a.kind, a.title]), available[0]?.kind), weekday = select(WEEKDAYS.map((d, i) => [i, d]), 1), hour = select(Array.from({ length: 24 }, (_, i) => [i, `${String(i).padStart(2, '0')}:00`]), 8);
+    const zone = h('input', { type: 'text', maxlength: '60', value: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', 'aria-label': 'Timezone' });
+    reportCard.append(h('h2', {}, 'Weekly reports'), h('p', { class: 'muted small' }, `A summary of last week, sent once a week and limited to what you can already see in the dashboard. ${emailDelivery ? 'Sent by email and shown under the bell.' : 'Email delivery is not switched on yet, so reports arrive under the bell for now.'}`),
+      subscriptions.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Report', 'When', 'Last sent', ''].map(t => h('th', {}, t)))), h('tbody', {}, subscriptions.map(s => h('tr', {}, h('td', {}, s.title), h('td', {}, `${WEEKDAYS[s.weekday]} ${String(s.hour).padStart(2, '0')}:00 (${s.timeZone})`), h('td', { class: 'muted' }, s.lastSentOn || 'Not yet'),
+        h('td', { class: 'actions-cell' }, h('div', { class: 'actions' }, h('button', { class: 'btn small', type: 'button', onclick: async () => { try { await api('POST', `/api/report-subscriptions/${s.id}/send-now`); toast('Sent. Look under the bell.'); } catch (e) { showError(main, e); } } }, 'Send now'), h('button', { class: 'btn small danger', type: 'button', onclick: async () => { try { await api('DELETE', `/api/report-subscriptions/${s.id}`); toast('Report removed.'); await loadReports(); } catch (e) { showError(main, e); } } }, 'Remove')))))))) : h('p', { class: 'muted small' }, 'You are not subscribed to any report.'),
+      h('div', { class: 'field-row' }, field('Report', kind), field('Timezone (e.g. America/New_York)', zone)), h('div', { class: 'field-row' }, field('Day', weekday), field('Time', hour)),
+      h('button', { class: 'btn primary', type: 'button', onclick: async () => { try { await api('POST', '/api/report-subscriptions', { kind: kind.value, weekday: Number(weekday.value), hour: Number(hour.value), timeZone: zone.value.trim() }); toast('Report saved.'); await loadReports(); } catch (e) { showError(main, e); } } }, 'Save report'));
+  };
+  loadReports().catch(() => {});
+  const notifyCard = h('div', { class: 'card' }); main.append(notifyCard);
+  api('GET', '/api/notifications?limit=1').then(({ settings }) => {
+    const box = h('input', { type: 'checkbox', id: 'notify-email', checked: settings.email, onchange: async () => { try { await api('PUT', '/api/me/notification-settings', { email: box.checked }); toast(box.checked ? 'Email copies turned on.' : 'Email copies turned off.'); } catch (e) { box.checked = !box.checked; showError(main, e); } } });
+    notifyCard.append(h('h2', {}, 'Notifications'), h('p', { class: 'muted small' }, 'Approvals, edits and requests appear under the bell in the sidebar.'), h('label', { class: 'check' }, box, 'Also send me an email copy'),
+      settings.emailDelivery ? null : h('p', { class: 'muted small' }, 'Email delivery is not switched on for this organization yet. Your choice is saved and takes effect when it is.'));
+  }).catch(() => {});
   const devicesHost = h('div', { class: 'card' }); main.append(devicesHost);
   const loadDevices = async () => {
     clear(devicesHost); devicesHost.append(h('h2', {}, 'Signed-in devices'));

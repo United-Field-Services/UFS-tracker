@@ -5,7 +5,7 @@ Written 2026-10-28. **Everything here is for synthetic test people only.** Do no
 ## What you can download and run
 | Item | Where | Notes |
 |---|---|---|
-| Windows installer (per-user, unsigned) | `source/release/UFS Desktop Tracker Setup 0.2.0.exe` (rebuilt 2026-10-28 11:10 PM, includes in-place updates with signed-hash binding) | 112,206,671 bytes, SHA-256 `A50BE91E4C9D8DA830BA0358CC6578314987C49EC1B43FFF7462A3F8AD29DC28`, **NotSigned**: Windows SmartScreen will warn ("More info", "Run anyway"). Not installed or launched by Claude. The file is git-ignored; share it by file transfer, not through git. |
+| Windows installer (per-user, unsigned) | `source/release/UFS Desktop Tracker Setup 0.2.0.exe` (rebuilt 2026-10-29 1:14 AM, adds the **Take a break** button; includes in-place updates with signed-hash binding) | 112,207,473 bytes, SHA-256 `30B2D0F16A7AEFD201DA0B3A815D6161C96023115AB7D1E274C96EE7291BC5D2`, **NotSigned**: Windows SmartScreen will warn ("More info", "Run anyway"). Not installed or launched by Claude. The file is git-ignored; share it by file transfer, not through git. |
 | Run from source instead | `cd source; npm start` | needs `npm ci` and `node node_modules/electron/install.js` once |
 | Test server + dashboard | `powershell -File server\start-staging.ps1` (stop: `server\stop-staging.ps1`) | Dashboard and API on `http://127.0.0.1:4301`; fake UFS People feed on 4311; uses the **real staging Supabase project** `ufs-tracker-staging`. Add `-Fresh` to wipe `server\data-staging`. |
 

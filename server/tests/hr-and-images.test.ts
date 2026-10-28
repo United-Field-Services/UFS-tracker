@@ -83,7 +83,7 @@ test('migrations add the hr role, directory, auth and aggregate activity tables 
   applyMigrations(db, 5);
   db.prepare("INSERT INTO activity_slices (id,user_id,entry_client_id,slice_start_at,duration_seconds,keyboard_count,mouse_count,active_seconds,created_at) VALUES ('s1','u2','c1','2026-10-21T23:59:00.000Z',60,2,3,30,'t'),('s2','u2','c1','2026-10-22T00:00:00.000Z',45,5,7,20,'t')").run();
   applyMigrations(db);
-  assert.equal(Number((db.prepare('PRAGMA user_version').get() as any).user_version), 6);
+  assert.equal(Number((db.prepare('PRAGMA user_version').get() as any).user_version), 11);
   assert.equal((db.prepare('SELECT COUNT(*) c FROM users').get() as any).c, 2);
   assert.equal((db.prepare("SELECT manager_id FROM users WHERE id='u2'").get() as any).manager_id, 'u1');
   assert.equal((db.prepare("SELECT consent_version FROM users WHERE id='u1'").get() as any).consent_version, 1);
@@ -107,7 +107,7 @@ test('migrations add the hr role, directory, auth and aggregate activity tables 
   assert.equal((db.prepare('PRAGMA foreign_keys').get() as any).foreign_keys, 1, 'foreign keys are switched back on');
   assert.throws(() => db.prepare("INSERT INTO sessions (token_hash,user_id,kind,created_at,last_seen_at,expires_at) VALUES ('t2','nobody','web','t','t','t')").run(), /FOREIGN KEY/);
   applyMigrations(db); // idempotent
-  assert.equal(Number((db.prepare('PRAGMA user_version').get() as any).user_version), 6);
+  assert.equal(Number((db.prepare('PRAGMA user_version').get() as any).user_version), 11);
 });
 
 // ---------------- image format policy ----------------

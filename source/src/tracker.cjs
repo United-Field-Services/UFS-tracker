@@ -137,13 +137,13 @@ class Tracker {
     this.message = keep ? 'Idle time kept. Tracking continues.' : 'Idle time discarded. Tracking continues.';
     return {kept: keep, idleMs};
   }
-  pause(message = 'Paused. No screenshots are being saved. The one-hour limit, if set, keeps counting down.') {
+  pause(message = 'Paused. No screenshots are being saved. The one-hour limit, if set, keeps counting down.', kind = 'manual') {
     if (!this.current || this.phase === 'stopped') return;
     if (this.current.idleReview && this.phase === 'tracking') this.resolveIdleReview(false, 'paused');
     this.phase = 'paused'; this.token = null; this.lastTick = null;
     if (this.current.mode !== 'one-hour') this.nextCaptureAt = null;
     this.pendingCapture = null; this.message = message;
-    this.current.events.push({ at: this.wall(), type: 'paused', reason: message });
+    this.current.events.push({ at: this.wall(), type: 'paused', reason: message, kind: kind === 'break' && this.current.mode === 'company' ? 'break' : kind === 'break' ? 'manual' : kind });
   }
   stop(message = 'Session stopped. Your screenshots are saved on this computer.', reason = 'manual') {
     if (!this.current) return null;

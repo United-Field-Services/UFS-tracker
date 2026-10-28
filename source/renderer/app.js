@@ -143,7 +143,7 @@ function render(state) {
   $('capture-count').textContent = `${shownSession?.captureCount || 0} screenshots this session`;
   $('start').disabled = active || starting;
   $('start').textContent = $('mode').value === 'one-hour' ? (paused ? '▶ Resume one-hour test' : '▶ Start one-hour test') : (paused ? '▶ Resume tracking' : '▶ Start tracking');
-  $('pause').disabled = !active;
+  $('pause').disabled = !active; $('break').hidden = !(company && active); // breaks are recorded for company sessions only
   $('stop').disabled = !state.current;
   for (const id of ['mode', 'task', 'display', 'interval', 'consent']) $(id).disabled = active || starting || (['mode', 'task'].includes(id) && paused) || (id === 'interval' && $('mode').value === 'one-hour') || (id === 'mode' && company);
   renderCompany(state);
@@ -196,7 +196,7 @@ $('work-reminder-dismiss').addEventListener('click', () => {
 });
 $('work-reminder-action').addEventListener('click', async () => {
   try {
-    if (currentReminder?.kind === 'break') { if (snapshot?.current) breakReminderNextAt = snapshot.current.trackedMs + (snapshot.sync?.policy?.breakReminderMinutes || 60) * 60_000; await api.pause(); }
+    if (currentReminder?.kind === 'break') { if (snapshot?.current) breakReminderNextAt = snapshot.current.trackedMs + (snapshot.sync?.policy?.breakReminderMinutes || 60) * 60_000; await api.pause({break: true}); }
     else if (currentReminder?.kind === 'schedule') $('start').click();
   } catch (e) { accountError(clean(e)); }
 });
@@ -262,6 +262,7 @@ $('start').addEventListener('click', async () => {
   }
 });
 $('pause').addEventListener('click', async () => { ++operation; endStream(); try {await api.pause(); await refreshGallery();} catch(e){error(e.message);} });
+$('break').addEventListener('click', async () => { ++operation; endStream(); try {await api.pause({break: true}); await refreshGallery();} catch(e){error(e.message);} });
 $('stop').addEventListener('click', async () => { ++operation; endStream(); try {await api.stop(); await refreshGallery(); await refreshDisplays();} catch(e){error(e.message);} });
 $('idle-review').addEventListener('cancel', event => event.preventDefault());
 async function resolveIdleReview(keep) {

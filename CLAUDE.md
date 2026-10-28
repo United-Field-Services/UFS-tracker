@@ -19,8 +19,8 @@ A visible, consent-based, Time Doctor-style tracker for UFS staff: Windows Elect
 - Report outcomes faithfully: say what failed, what was skipped, what was not verified.
 
 ## Commands
-- Server: `cd server && npm run check` (type-check + 154 API tests). Demo stack: `powershell -File server\reset-demo.ps1`. Dashboard browser test: `server\tests-ui\dashboard.ui.cjs` (99 checks, includes the Admin portal, screenshot manager and design pass; run it on a freshly reset synthetic stack and wait until `GET /api/screenshots/summary` shows 400 screenshots; it deletes demo screenshots). Dashboard UI helpers live in `server/public/ui.js`.
-- Desktop: `cd source && npm run check` (202 tests, 196 pass and 6 Linux-only skipped); `npm start`; `npm run build:win`.
+- Server: `cd server && npm run check` (type-check + 188 API tests). Demo stack: `powershell -File server\reset-demo.ps1`. Dashboard browser test: `server\tests-ui\dashboard.ui.cjs` (156 checks, includes the Admin portal, screenshot manager, design pass, payroll, privacy, notifications, Team and Day view; run it on a freshly reset synthetic stack and wait until `GET /api/screenshots/summary` shows 400 screenshots; it deletes demo screenshots). Dashboard UI helpers live in `server/public/ui.js`.
+- Desktop: `cd source && npm run check` (214 tests, 208 pass and 6 Linux-only skipped); `npm start`; `npm run build:win`.
 - Real end to end (real screenshots, wipes `%APPDATA%\UFS Desktop Tracker\Local Tracker Data`): `E2E_WIPE_DATA=1 PW_PATH=<playwright-core> node source\e2e\company.e2e.cjs`.
 - Node 24 required. Playwright is not a project dependency; install `playwright-core` in a **short path** (Windows 260-character limit).
 
@@ -32,6 +32,7 @@ In-place updates use `electron-updater` from the server's `/updates/` feed (`sou
 - `source/tests/main.test.cjs` runs `main.cjs` in a VM realm: compare returned objects as JSON.
 - Tests that move the fake clock past 12 h must log in again.
 - Git: the owner (2026-10-28) chose `https://github.com/United-Field-Services/UFS-tracker` (branch `main`) for version control; this folder is the repo. Commit/push only when asked. `.gitignore` keeps `server/.staging-local/` (synthetic staging credentials), data folders, `node_modules/` and `source/release/` out; never commit secrets. CI is `.github/workflows/ci.yml`.
+- Webhooks only reach public https hosts; WEBHOOK_DEV=1 (set by server\reset-demo.ps1, local demo only) lets them target http/localhost for testing. Never set it in production. server/src/webhooks.ts keeps separate IPv4 and IPv6 block lists on purpose (a shared list blocks all IPv4).
 - Shell heredocs with backslashes/apostrophes get mangled: write patch scripts to a file or use the editor tool.
 
 ## Current state (2026-10-27)

@@ -8,6 +8,8 @@ import type { Row } from './db.ts';
 import { HttpError, audit, canSeeUser, currentUser, isAdmin, visibleUserIds, type AuthUser } from './auth.ts';
 import { effectivePolicy } from './policy.ts';
 import { IMAGE_EXT, IMAGE_MIME, imageKind, inspectScreenshot } from './storage.ts';
+import { notify, reviewersOf } from './notifications.ts';
+import { emitWebhook } from './webhooks.ts';
 
 const HOUR = 3600_000, DAY = 86400_000;
 const PRESENCE_FRESH_MS = 90_000;
@@ -74,7 +76,20 @@ export function trackerRoutes(ctx: Ctx) {
     clientId: z.string().regex(/^[A-Za-z0-9-]{8,64}$/), projectId: z.string().nullable().optional(), taskId: z.string().nullable().optional(),
     taskLabel: z.string().trim().max(120).default(''), mode: z.enum(['manual', 'one-hour', 'company']).default('manual'), activityTrackingEnabled: z.boolean().default(false),
     startAt: z.string(), endAt: z.string().nullable().optional(), trackedMs: z.number().int().min(0).max(2 * DAY), idleMs: z.number().int().min(0).max(2 * DAY).default(0),
+    breaks: z.array(z.object({ startAt: z.string(), endAt: z.string().nullable().optional() }).strict()).max(200).default([]),
   });
+  /** Stores the breaks that belong inside this entry; returns how many were ignored as implausible. An open break is closed once, a closed one never changes. */
+  const saveBreaks = (userId: string, clientId: string, entryStartMs: number, entryEndMs: number | null, list: { startAt: string; endAt?: string | null }[]) => {
+    let ignored = 0; const limitMs = (entryEndMs ?? nowMs()) + 60_000; const ts = nowIso(nowMs());
+    for (const item of list) {
+      const s = Date.parse(item.startAt), e = item.endAt ? Date.parse(item.endAt) : null;
+      const ok = Number.isFinite(s) && (e === null || Number.isFinite(e)) && s >= entryStartMs - 60_000 && s <= limitMs && (e === null || (e > s && e <= limitMs && e - s <= 12 * HOUR));
+      if (!ok) { ignored++; continue; }
+      ctx.db.prepare('INSERT INTO breaks (id,user_id,entry_client_id,start_at,end_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(user_id,entry_client_id,start_at) DO UPDATE SET end_at = excluded.end_at, updated_at = excluded.updated_at WHERE breaks.end_at IS NULL')
+        .run(crypto.randomUUID(), userId, clientId, new Date(s).toISOString(), e === null ? null : new Date(e).toISOString(), ts, ts);
+    }
+    return ignored;
+  };
   // Tracker upsert: idempotent by (user, clientId); a finished entry cannot be silently rewritten.
   r.post('/api/time-entries/sync', (req, res) => {
     const u = currentUser(res);
@@ -99,18 +114,21 @@ export function trackerRoutes(ctx: Ctx) {
       const id = crypto.randomUUID();
       ctx.db.prepare(`INSERT INTO time_entries (id,user_id,client_id,project_id,task_id,task_label,source,mode,start_at,end_at,tracked_ms,idle_ms,status,activity_enabled,activity_consent_version,created_at,updated_at)
         VALUES (?,?,?,?,?,?,'tracker',?,?,?,?,?,'pending',?,?,?,?)`).run(id, u.id, b.clientId, b.projectId ?? null, b.taskId ?? null, b.taskLabel, b.mode, new Date(startMs).toISOString(), endMs === null ? null : new Date(endMs).toISOString(), b.trackedMs, b.idleMs, authorizedActivity ? 1 : 0, authorizedActivity ? policy.consentVersion : null, ts, ts);
-      return send(res, 201, { id, created: true });
+      const ignoredBreaks = saveBreaks(u.id, b.clientId, startMs, endMs, b.breaks);
+      return send(res, 201, { id, created: true, ...(ignoredBreaks ? { ignoredBreaks } : {}) });
     }
     if (existing.status !== 'pending' || existing.edited) return send(res, 200, { id: existing.id, locked: true }); // reviewed/edited by a manager: keep theirs
     if (existing.end_at) {
       const same = endMs !== null && Date.parse(existing.end_at) === endMs && existing.tracked_ms === b.trackedMs;
       if (!same) throw new HttpError(409, 'This entry is already finished.');
-      return send(res, 200, { id: existing.id, duplicate: true });
+      const ignoredBreaks = saveBreaks(u.id, b.clientId, Date.parse(existing.start_at), Date.parse(existing.end_at), b.breaks);
+      return send(res, 200, { id: existing.id, duplicate: true, ...(ignoredBreaks ? { ignoredBreaks } : {}) });
     }
     if (b.trackedMs < existing.tracked_ms) return send(res, 200, { id: existing.id, stale: true }); // out-of-order retry
     ctx.db.prepare('UPDATE time_entries SET project_id=?, task_id=?, task_label=?, end_at=?, tracked_ms=?, idle_ms=?, activity_enabled=?, activity_consent_version=?, updated_at=? WHERE id=?')
       .run(b.projectId ?? null, b.taskId ?? null, b.taskLabel, endMs === null ? null : new Date(endMs).toISOString(), b.trackedMs, b.idleMs, authorizedActivity ? 1 : 0, authorizedActivity ? policy.consentVersion : null, ts, existing.id);
-    send(res, 200, { id: existing.id, updated: true });
+    const ignoredBreaks = saveBreaks(u.id, b.clientId, Date.parse(existing.start_at), endMs, b.breaks);
+    send(res, 200, { id: existing.id, updated: true, ...(ignoredBreaks ? { ignoredBreaks } : {}) });
   });
 
   // Aggregate-only activity upload. The client sends one minute slice at a time;
@@ -189,6 +207,8 @@ export function trackerRoutes(ctx: Ctx) {
     ctx.db.prepare(`INSERT INTO time_entries (id,user_id,client_id,project_id,task_id,task_label,source,start_at,end_at,tracked_ms,idle_ms,status,note,created_at,updated_at)
       VALUES (?,?,?,?,?,?,'manual',?,?,?,0,'pending',?,?,?)`).run(id, u.id, clientId ?? `manual-${id}`, b.projectId ?? null, b.taskId ?? null, b.taskLabel, new Date(s).toISOString(), new Date(e).toISOString(), e - s, b.note ?? null, ts, ts);
     audit(ctx.db, ctx.cfg, u.id, 'time.manual_added', 'time_entry', id, { ms: e - s });
+    notify(ctx, reviewersOf(ctx, u.id), { kind: 'time.manual_pending', title: `${u.name} submitted manual time`, body: `${Math.round((e - s) / 60000)} minutes are waiting for your approval.`, link: 'timesheets' });
+    emitWebhook(ctx, 'time.submitted', { entryId: id, userId: u.id, startAt: new Date(s).toISOString(), endAt: new Date(e).toISOString(), trackedMs: e - s, source: 'manual' });
     send(res, 201, { id });
   });
 
@@ -236,6 +256,8 @@ export function trackerRoutes(ctx: Ctx) {
     ctx.db.prepare(`UPDATE time_entries SET project_id=?, task_id=?, task_label=?, start_at=?, end_at=?, tracked_ms=?, idle_ms=?, note=?, edited=?, status=?, reviewed_by=NULL, reviewed_at=NULL, updated_at=? WHERE id=?`)
       .run(projectId, taskId, b.taskLabel ?? row.task_label, new Date(startMs).toISOString(), new Date(endMs).toISOString(), tracked, idle, b.note ?? row.note, reviewer ? 1 : row.edited, reviewer ? 'pending' : row.status, nowIso(nowMs()), row.id);
     audit(ctx.db, ctx.cfg, u.id, reviewer ? 'time.edited_by_reviewer' : 'time.edited', 'time_entry', row.id, { reason: b.reason ?? null, before, after: b });
+    if (reviewer) emitWebhook(ctx, 'time.edited', { entryId: row.id, userId: row.user_id, startAt: new Date(startMs).toISOString(), endAt: new Date(endMs).toISOString(), trackedMs: tracked, status: 'pending', editedBy: u.id });
+    if (reviewer) notify(ctx, [row.user_id], { kind: 'time.edited', title: 'Your time was edited by a reviewer', body: b.reason, link: 'timesheets' });
     send(res, 200, { entry: entryOut(loadEntry(row.id)) });
   });
 
@@ -249,6 +271,8 @@ export function trackerRoutes(ctx: Ctx) {
       const { note } = parse(z.object({ note: z.string().trim().max(300).optional() }), req.body ?? {});
       ctx.db.prepare('UPDATE time_entries SET status=?, reviewed_by=?, reviewed_at=?, updated_at=?, note=COALESCE(?, note) WHERE id=?').run(status, u.id, nowIso(nowMs()), nowIso(nowMs()), note ?? null, row.id);
       audit(ctx.db, ctx.cfg, u.id, status === 'approved' ? 'time.approved' : 'time.rejected', 'time_entry', row.id, { note: note ?? null });
+      emitWebhook(ctx, status === 'approved' ? 'time.approved' : 'time.rejected', { entryId: row.id, userId: row.user_id, startAt: row.start_at, endAt: row.end_at, trackedMs: row.tracked_ms, status, reviewedBy: u.id });
+      notify(ctx, [row.user_id], { kind: `time.${status}`, title: `Your time was ${status}`, body: `${new Date(row.start_at).toISOString().slice(0, 10)} · ${Math.round(row.tracked_ms / 60000)} minutes${note ? ` · ${note}` : ''}`, link: 'timesheets' });
       send(res, 200, { entry: entryOut(loadEntry(row.id)) });
     });
   }
@@ -397,6 +421,76 @@ export function trackerRoutes(ctx: Ctx) {
     }
     if (deleted.length) audit(ctx.db, ctx.cfg, u.id, 'screenshot.bulk_deleted', 'screenshot', undefined, { count: deleted.length, skipped: skipped.length, ...(body.reason ? { reason: body.reason } : {}) });
     send(res, 200, { deleted: deleted.length, skipped });
+  });
+
+  // ---------- day timeline and team summary ----------
+  const tzParam = (value: unknown) => { const tz = Math.round(Number(value ?? 0)) || 0; if (tz < -14 * 60 || tz > 14 * 60) throw new HttpError(400, 'tzOffsetMinutes is out of range.'); return tz; };
+  const MIN = 60_000;
+
+  /** One person's day in the viewer's timezone: time blocks, screenshots (if the policy lets this viewer see them) and count-only activity per hour. */
+  r.get('/api/timeline', (req, res) => {
+    const u = currentUser(res);
+    const userId = req.query.userId ? String(req.query.userId) : u.id;
+    if (!canSeeUser(ctx.db, u, userId)) throw new HttpError(403, 'You cannot view this person.');
+    const date = String(req.query.date ?? ''); if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(Date.parse(`${date}T00:00:00Z`)) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) throw new HttpError(400, 'date must be a real calendar date, YYYY-MM-DD.');
+    const tz = tzParam(req.query.tzOffsetMinutes);
+    const startMs = Date.parse(`${date}T00:00:00Z`) - tz * MIN, endMs = startMs + DAY, startIso = new Date(startMs).toISOString(), endIso = new Date(endMs).toISOString();
+    const person = ctx.db.prepare('SELECT id, name, role FROM users WHERE id = ?').get(userId) as Row | undefined;
+    if (!person) throw new HttpError(404, 'Person not found.');
+    const entries = (ctx.db.prepare(`SELECT e.*, p.name project_name FROM time_entries e LEFT JOIN projects p ON p.id = e.project_id WHERE e.user_id = ? AND e.start_at < ? AND (e.end_at IS NULL OR e.end_at > ?) ORDER BY e.start_at`).all(userId, endIso, startIso) as Row[])
+      .map(e => ({ id: e.id, startAt: e.start_at, endAt: e.end_at, running: !e.end_at, trackedMs: e.tracked_ms, idleMs: e.idle_ms, status: e.status, source: e.source, projectName: e.project_name ?? null, taskLabel: e.task_label }));
+    const policyOf = subjectPolicy(); const mayShots = mayViewShots(u, userId, policyOf);
+    const shots = mayShots ? (ctx.db.prepare('SELECT id, taken_at, thumb_file_name, width, height, bytes, file_name FROM screenshots WHERE user_id = ? AND deleted_at IS NULL AND taken_at >= ? AND taken_at < ? ORDER BY taken_at').all(userId, startIso, endIso) as Row[])
+      .map(s => ({ id: s.id, takenAt: s.taken_at, hasThumb: !!s.thumb_file_name, width: s.width, height: s.height, bytes: s.bytes, format: String(s.file_name).endsWith('.webp') ? 'webp' : 'png' })) : null;
+    // Count-only activity estimates per local hour (only exists when the organization enabled it and the person consented).
+    const slices = ctx.db.prepare('SELECT s.slice_start_at, s.duration_seconds, s.active_seconds, s.keyboard_count, s.mouse_count, s.entry_client_id FROM activity_slices s WHERE s.user_id = ? AND s.slice_start_at >= ? AND s.slice_start_at < ?').all(userId, startIso, endIso) as Row[];
+    const hours = Array.from({ length: 24 }, (_, hour) => ({ hour, sampledSeconds: 0, activeSeconds: 0, keyDownCount: 0, mouseClickCount: 0 }));
+    for (const s of slices) { const h = hours[Math.min(23, Math.max(0, Math.floor((Date.parse(s.slice_start_at) - startMs) / (60 * MIN))))]!; h.sampledSeconds += s.duration_seconds; h.activeSeconds += s.active_seconds; h.keyDownCount += s.keyboard_count; h.mouseClickCount += s.mouse_count; }
+    if (slices.length && userId !== u.id && u.role !== 'owner') audit(ctx.db, ctx.cfg, u.id, 'activity.viewed', 'user', userId, { estimate: true, date });
+    // Breaks the person chose to take (a break still going counts up to now, at most 12 h).
+    const breaks = (ctx.db.prepare('SELECT start_at, end_at FROM breaks WHERE user_id = ? AND start_at < ? AND (end_at IS NULL OR end_at > ?) ORDER BY start_at').all(userId, endIso, startIso) as Row[])
+      .map(b => ({ startAt: b.start_at, endAt: b.end_at, open: !b.end_at }));
+    const breakMs = breaks.reduce((t, b) => { const s = Math.max(Date.parse(b.startAt), startMs), e = Math.min(b.endAt ? Date.parse(b.endAt) : Math.min(nowMs(), Date.parse(b.startAt) + 12 * HOUR), endMs); return t + Math.max(0, e - s); }, 0);
+    const tracked = entries.reduce((t, e) => t + e.trackedMs, 0), idle = entries.reduce((t, e) => t + e.idleMs, 0);
+    send(res, 200, {
+      person: { id: person.id, name: person.name, role: person.role }, date, tzOffsetMinutes: tz, dayStartAt: startIso, dayEndAt: endIso, entries, breaks,
+      screenshots: shots, screenshotsHidden: !mayShots,
+      activity: slices.length ? { hours, note: 'Count-only estimate from keyboard and mouse input (no key identity, text or position). Not a measure of productivity or quality.' } : null,
+      totals: { trackedMs: tracked, idleMs: idle, breakMs, breaks: breaks.length, entries: entries.length, pending: entries.filter(e => e.status === 'pending' && !e.running).length, screenshots: shots?.length ?? null, firstStartAt: entries[0]?.startAt ?? null, lastEndAt: entries.filter(e => e.endAt).at(-1)?.endAt ?? null },
+    });
+  });
+
+  /** Everyone the viewer may see: tracked time per day, status and approvals waiting. Facts only; no scores. */
+  r.get('/api/team/summary', (req, res) => {
+    const u = currentUser(res);
+    const days = Math.min(31, Math.max(1, Math.round(Number(req.query.days ?? 7)) || 7));
+    const tz = tzParam(req.query.tzOffsetMinutes);
+    const now = nowMs();
+    const dayKey = (ms: number) => new Date(ms + tz * MIN).toISOString().slice(0, 10);
+    const keys: string[] = []; for (let i = days - 1; i >= 0; i--) keys.push(dayKey(now - i * DAY));
+    const windowStart = new Date(Date.parse(`${keys[0]}T00:00:00.000Z`) - tz * MIN).toISOString();
+    const visible = visibleUserIds(ctx.db, u);
+    const people = (ctx.db.prepare('SELECT u.id, u.name, u.role, t.name team_name FROM users u LEFT JOIN teams t ON t.id = u.team_id WHERE u.active = 1 ORDER BY u.name COLLATE NOCASE').all() as Row[]).filter(x => visible === null || visible.has(x.id));
+    const entries = ctx.db.prepare('SELECT user_id, start_at, tracked_ms, idle_ms, status, end_at FROM time_entries WHERE start_at >= ?').all(windowStart) as Row[];
+    const presence = new Map((ctx.db.prepare('SELECT user_id, status, last_seen_at FROM presence').all() as Row[]).map(p => [p.user_id, p]));
+    const pendingBy = new Map((ctx.db.prepare("SELECT user_id, COUNT(*) c FROM time_entries WHERE status = 'pending' AND end_at IS NOT NULL GROUP BY user_id").all() as Row[]).map(p => [p.user_id, Number(p.c)]));
+    const shotsBy = new Map((ctx.db.prepare('SELECT user_id, COUNT(*) c FROM screenshots WHERE deleted_at IS NULL AND taken_at >= ? GROUP BY user_id').all(windowStart) as Row[]).map(p => [p.user_id, Number(p.c)]));
+    const policyOf = subjectPolicy();
+    const breakBy = new Map<string, { ms: number; count: number }>();
+    for (const b of ctx.db.prepare('SELECT user_id, start_at, end_at FROM breaks WHERE start_at >= ?').all(windowStart) as Row[]) {
+      const ms = Math.max(0, (b.end_at ? Date.parse(b.end_at) : Math.min(now, Date.parse(b.start_at) + 12 * HOUR)) - Date.parse(b.start_at));
+      const t = breakBy.get(b.user_id) ?? { ms: 0, count: 0 }; t.ms += ms; t.count++; breakBy.set(b.user_id, t);
+    }
+    const rows = people.map(p => {
+      const perDay = new Map(keys.map(k => [k, 0])); let idle = 0;
+      for (const e of entries) if (e.user_id === p.id && e.status !== 'rejected') { const k = dayKey(Date.parse(e.start_at)); if (perDay.has(k)) { perDay.set(k, perDay.get(k)! + e.tracked_ms); idle += e.idle_ms; } }
+      const total = [...perDay.values()].reduce((a, b) => a + b, 0), pr = presence.get(p.id);
+      const fresh = pr && now - Date.parse(pr.last_seen_at) <= 90_000 && pr.status !== 'stopped';
+      return { userId: p.id, name: p.name, role: p.role, team: p.team_name ?? null, state: fresh ? pr!.status : 'offline', lastSeenAt: pr?.last_seen_at ?? null,
+        daily: keys.map(k => ({ date: k, trackedMs: perDay.get(k)! })), trackedMs: total, idleMs: idle, breakMs: breakBy.get(p.id)?.ms ?? 0, breaks: breakBy.get(p.id)?.count ?? 0, activeDays: [...perDay.values()].filter(v => v > 0).length, pendingApprovals: pendingBy.get(p.id) ?? 0,
+        screenshots: mayViewShots(u, p.id, policyOf) ? (shotsBy.get(p.id) ?? 0) : null };
+    });
+    send(res, 200, { days, dates: keys, people: rows, totals: { trackedMs: rows.reduce((t, x) => t + x.trackedMs, 0), pending: rows.reduce((t, x) => t + x.pendingApprovals, 0), tracking: rows.filter(x => x.state === 'tracking').length }, note: 'Facts from tracked time only. Idle time is an input estimate; none of this is a productivity, attendance or pay measure.' });
   });
 
   return r;

@@ -1,4 +1,5 @@
 'use strict';
+const {breaksOf} = require('./breaks.cjs');
 // Company sync for the desktop tracker. Runs ONLY in the Electron main process, so the renderer keeps
 // its "no network" CSP. Nothing here runs unless the user explicitly signs in to a company server.
 const fs = require('node:fs');
@@ -170,7 +171,8 @@ class SyncClient {
     const elapsed = Math.max(0, end - start);
     const tracked = Math.min(Math.round(session.trackedMs || 0), elapsed + 30_000); // never claim more than wall-clock time
     return {clientId: session.id, projectId: session.projectId ?? null, taskId: session.taskId ?? null, taskLabel: String(session.task ?? '').slice(0, 120), mode: 'company', activityTrackingEnabled: session.activityTrackingEnabled === true,
-      startAt: session.startedAt, endAt: session.endedAt ?? null, trackedMs: Math.max(0, tracked), idleMs: Math.min(Math.max(0, Math.round(session.idleMs || 0)), Math.max(0, tracked))};
+      startAt: session.startedAt, endAt: session.endedAt ?? null, trackedMs: Math.max(0, tracked), idleMs: Math.min(Math.max(0, Math.round(session.idleMs || 0)), Math.max(0, tracked)),
+      breaks: breaksOf(session.events, session.endedAt ?? null)};
   }
   enqueueEntry(session) {
     if (!this.canQueueForCurrentUser || !session || session.mode !== 'company') return;

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Ctx } from './ctx.ts';
 import { audit, type Role } from './auth.ts';
 import { nowIso, type Row } from './db.ts';
+import { notify, ownersAndAdmins } from './notifications.ts';
 
 /**
  * UFS People directory feed (read-only, pull). The tracker never connects to UFS People's database. UFS People
@@ -156,6 +157,7 @@ export async function runDirectorySync(ctx: Ctx, opts: { trigger: 'schedule' | '
     .run(nowIso(ctx.cfg.now()), opts.trigger, report.status, report.feedGeneratedAt, report.added, report.updated, report.deactivated, report.reactivated, report.unchanged, report.message, JSON.stringify(report.warnings.slice(0, 50)));
   audit(ctx.db, ctx.cfg, opts.actorId ?? null, report.status === 'ok' ? 'directory.synced' : report.status === 'blocked' ? 'directory.sync_blocked' : 'directory.sync_failed', 'directory', undefined,
     { trigger: opts.trigger, forced: !!opts.force, added: report.added, updated: report.updated, deactivated: report.deactivated, reactivated: report.reactivated, message: report.message });
+  if (report.status !== 'ok') notify(ctx, ownersAndAdmins(ctx), { kind: `directory.${report.status}`, title: report.status === 'blocked' ? 'A UFS People directory sync was blocked' : 'A UFS People directory sync failed', body: report.message ?? undefined, link: 'people', dedupe: true });
   return report;
 }
 
