@@ -1,5 +1,21 @@
 # PROGRESS
 
+## 2026-10-29 - Dashboard design-system pass
+**Status**: Done and tested on synthetic data; uncommitted. Details in `DASHBOARD-AUDIT-AND-PLAN.md` section 2b.
+- New `server/public/ui.js` (shared helpers and components, loaded before `app.js`): icons, toasts, loading skeletons, "More" row menu, table-to-card annotation for phones, empty states with icon and hint; helpers moved out of `app.js`.
+- Look and accessibility: nav icons, spacing/focus tokens, row hover, skip link, focus moves to the page on menu navigation, reduced-motion support, larger chart labels. Phones: tables as labelled cards, horizontally scrolling menu.
+- People table: `Edit` + "More" menu (Reset password, Sign out everywhere), fixed-position so the table cannot clip it; fits at 1360 px with no sideways scroll.
+- Tests: browser suite **99/99** on a clean synthetic stack (11 new design checks; a policy-editor race in an existing check fixed with a wait). Server 154/154 (no server change). Two earlier runs failed only because the demo stack was not fully restarted/seeded when the test began; the run that waits until the stack is seeded passed. Always confirm `GET /api/screenshots/summary` shows 400 before running the suite.
+- Not done: splitting views into modules, a custom confirm dialog instead of `confirm()`, screen-reader walkthrough, visual review of the dark theme. Desktop app and installer unchanged.
+
+## 2026-10-28 (late night) - Dashboard audit, Admin portal and screenshot manager
+**Status**: Built and tested against synthetic data; uncommitted at the time of writing. First slice of the dashboard re-engineering; the plan and remaining phases are in `DASHBOARD-AUDIT-AND-PLAN.md`.
+- **Observation first:** ran the dashboard as owner on the demo stack and read the code; findings table in the audit file (thin overview, no admin portal, screenshot grid capped with no paging/bulk/storage view, clipped People actions, one 57 KB `app.js`).
+- **Server:** `src/routes-portal.ts` (`GET /api/admin/overview`, owner/admin/HR, audited, aggregates only); in `routes-tracker.ts`: screenshot list `projectId` + `before` cursor + `hasMore`, `GET /api/screenshots/summary`, `POST /api/screenshots/bulk-delete` (max 100, per-item checks, audit per item + summary, reason). 
+- **Dashboard:** new "Admin portal" page (owner, admin, HR) with SVG charts; rebuilt Screenshots page (summary, filters, grouping, Load more, select mode and bulk delete, viewer with arrows/download); `h()` applies `style` through the CSS object model (strict CSP blocks style attributes; caught by the browser test).
+- **Tests:** server **154/154** (9 new in `tests/portal.test.ts`); browser suite **88/88** on a freshly reset synthetic stack (16 new checks; two existing nav checks updated for the new menu item). One earlier run showed a timing flake in the all-screens policy check on a reused demo database; it passed on a fresh stack. Desktop suite unchanged (205 tests, 199 pass, 6 skipped); installer not rebuilt (dashboard-only change).
+- **Not done:** the design-system pass (shared components, responsive tables, People action clipping), per-person day timeline, and the Time Doctor tracks (notifications/email, payroll, API, integrations); real-hardware, hosting and legal items as before.
+
 ## 2026-10-28 (night) - Pushed to GitHub; updater hardened (installer bytes bound to the signed hash)
 - **Pushed** `main` (3 commits) to `https://github.com/United-Field-Services/UFS-tracker` by the owner. First CI run (`ci` workflow, commit 484bdfa) was in progress when last checked; confirm it passes.
 - **The repository is PUBLIC** (GitHub API: `private: false`). It contains planning/handoff docs and the staging Supabase project ref; no keys, passwords or real data were found before committing (secret scan), and `server/.staging-local/` is git-ignored. Decide whether it should be private; changing it is the owner's call (GitHub: Settings, Danger Zone, Change visibility).

@@ -19,7 +19,7 @@ A visible, consent-based, Time Doctor-style tracker for UFS staff: Windows Elect
 - Report outcomes faithfully: say what failed, what was skipped, what was not verified.
 
 ## Commands
-- Server: `cd server && npm run check` (type-check + 149 API tests). Demo stack: `powershell -File server\reset-demo.ps1`. Dashboard browser test: `server\tests-ui\dashboard.ui.cjs` (72 checks; use a temporary synthetic database and endpoint overrides when isolating it).
+- Server: `cd server && npm run check` (type-check + 154 API tests). Demo stack: `powershell -File server\reset-demo.ps1`. Dashboard browser test: `server\tests-ui\dashboard.ui.cjs` (99 checks, includes the Admin portal, screenshot manager and design pass; run it on a freshly reset synthetic stack and wait until `GET /api/screenshots/summary` shows 400 screenshots; it deletes demo screenshots). Dashboard UI helpers live in `server/public/ui.js`.
 - Desktop: `cd source && npm run check` (202 tests, 196 pass and 6 Linux-only skipped); `npm start`; `npm run build:win`.
 - Real end to end (real screenshots, wipes `%APPDATA%\UFS Desktop Tracker\Local Tracker Data`): `E2E_WIPE_DATA=1 PW_PATH=<playwright-core> node source\e2e\company.e2e.cjs`.
 - Node 24 required. Playwright is not a project dependency; install `playwright-core` in a **short path** (Windows 260-character limit).

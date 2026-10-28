@@ -11,36 +11,6 @@ let timers = [];
 
 const NOTICE_VERSION_TEXT = 'This tracker records the time you track and, when enabled by your organization, periodic screenshots of the screen or screens specified by organization policy while the tracker is visibly running. It may also count keyboard key-downs and mouse clicks and estimate the number of seconds with input in each minute. It never records key identity, typed text, mouse position, or app and website names. Your manager, HR and administrators can review data according to your organization\'s policy. You can pause or stop tracking at any time. Screenshots are deleted automatically after the retention period. (Draft wording: have HR/legal review before rollout.)';
 
-// ---------- helpers ----------
-function h(tag, attrs, ...kids) {
-  const el = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs || {})) {
-    if (value === undefined || value === null || value === false) continue;
-    if (key === 'class') el.className = value;
-    else if (key.startsWith('on')) el.addEventListener(key.slice(2), value);
-    else if (key === 'value') el.value = value;
-    else if (value === true) el.setAttribute(key, '');
-    else el.setAttribute(key, String(value));
-  }
-  for (const kid of kids.flat()) {
-    if (kid === null || kid === undefined || kid === false) continue;
-    el.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
-  }
-  return el;
-}
-const clear = el => { while (el.firstChild) el.removeChild(el.firstChild); };
-const pad = n => String(n).padStart(2, '0');
-const dur = ms => { const m = Math.round((ms || 0) / 60000); return `${Math.floor(m / 60)}h ${pad(m % 60)}m`; };
-const dtShort = iso => new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-const timeOnly = iso => new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
-const dayLabel = iso => new Date(iso).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-const dateInputValue = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const localInputValue = iso => { const d = new Date(iso); return `${dateInputValue(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-const tzOffset = () => -new Date().getTimezoneOffset();
-function rangeFromInputs(fromValue, toValue) {
-  const from = new Date(`${fromValue}T00:00:00`); const to = new Date(`${toValue}T00:00:00`); to.setDate(to.getDate() + 1);
-  return { from: from.toISOString(), to: to.toISOString() };
-}
 const isAdmin = () => me && (me.user.role === 'owner' || me.user.role === 'admin');
 const isLead = () => me && (isAdmin() || me.user.role === 'manager');
 const isReviewer = () => isLead();
@@ -66,27 +36,8 @@ async function download(path, filename) {
   const a = h('a', { href: url, download: filename }); document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 function signOutLocal() { token = null; me = null; try { sessionStorage.removeItem(TOKEN_KEY); } catch { /* ignore */ } renderLogin(); }
-function banner(kind, text) { return h('div', { class: `banner ${kind}`, role: kind === 'error' ? 'alert' : 'status' }, text); }
-function showError(host, error) { host.querySelectorAll('.banner.error').forEach(b => b.remove()); host.prepend(banner('error', error.message || String(error))); }
-function field(label, control) { return h('label', { class: 'field' }, h('span', {}, label), control); }
-function select(options, value, attrs) { const s = h('select', attrs, options.map(([v, l]) => h('option', { value: v }, l))); if (Array.isArray(value)) for (const option of s.options) option.selected = value.includes(Number(option.value)); else if (value !== undefined && value !== null) s.value = value; return s; }
-function badge(text, kind) { return h('span', { class: `badge ${kind || ''}` }, text); }
-function statusBadge(status) { return badge(status, status === 'approved' ? 'ok' : status === 'rejected' ? 'bad' : 'warn'); }
-function stat(label, value) { return h('div', { class: 'stat' }, h('span', {}, label), h('strong', {}, value)); }
-function emptyState(text) { return h('div', { class: 'empty' }, text); }
 function registerTimer(id) { timers.push(id); }
 function clearTimers() { timers.forEach(clearInterval); timers = []; }
-
-function dialog(title, content, { wide = false, actions = [] } = {}) {
-  const dlg = h('dialog', { class: wide ? 'wide' : '' });
-  const errorHost = h('div', {});
-  dlg.append(h('h2', {}, title), errorHost, ...[content].flat(), h('div', { class: 'dialog-actions' }, ...actions));
-  dlg.addEventListener('close', () => { dlg.querySelectorAll('img.full').forEach(i => URL.revokeObjectURL(i.src)); dlg.remove(); });
-  document.body.append(dlg); dlg.showModal();
-  dlg.fail = error => { clear(errorHost); errorHost.append(banner('error', error.message || String(error))); };
-  return dlg;
-}
-const cancelButton = dlg => h('button', { class: 'btn', type: 'button', onclick: () => dlg.close() }, 'Cancel');
 
 // ---------- login ----------
 function renderLogin(message) {
@@ -137,6 +88,7 @@ async function logout() { try { await api('POST', '/api/auth/logout'); } catch {
 // ---------- shell ----------
 const NAV = [
   ['overview', 'Overview', () => true],
+  ['admin', 'Admin portal', () => isAdmin() || (me && me.user.role === 'hr')],
   ['timesheets', 'Timesheets', () => true],
   ['screenshots', 'Screenshots', () => true],
   ['reports', 'Reports', () => true],
@@ -150,19 +102,26 @@ const VIEWS = {};
 
 function renderShell() {
   clearTimers(); clear(root);
-  const main = h('main', { class: 'main', id: 'main' });
-  const nav = h('nav', { class: 'nav', 'aria-label': 'Main' }, NAV.filter(([, , show]) => show()).map(([id, label]) => h('button', { type: 'button', 'data-view': id, 'aria-current': id === current ? 'page' : null, onclick: () => go(id) }, label)));
+  const main = h('main', { class: 'main', id: 'main', tabindex: '-1' });
+  watchTables(main); // narrow screens show tables as labelled cards
+  const nav = h('nav', { class: 'nav', 'aria-label': 'Main' }, NAV.filter(([, , show]) => show()).map(([id, label]) => h('button', { type: 'button', 'data-view': id, 'aria-current': id === current ? 'page' : null, onclick: () => go(id, true) }, icon(id), h('span', {}, label))));
   root.append(h('div', { class: 'shell' },
     h('aside', { class: 'sidebar' }, h('div', { class: 'brand' }, h('span', { class: 'brand-mark' }, 'U'), h('div', {}, 'UFS Tracker', h('small', {}, 'TIME & ACTIVITY'))), nav,
       h('div', { class: 'sidebar-foot' }, h('div', { class: 'small' }, h('strong', {}, me.user.name)), h('div', { class: 'small muted' }, me.user.role), h('button', { class: 'btn small', type: 'button', onclick: logout }, 'Sign out'))),
     main));
   return main;
 }
-async function go(id) {
+async function go(id, fromNav = false) {
   current = id; clearTimers();
   document.querySelectorAll('.nav button').forEach(b => b.setAttribute('aria-current', b.dataset.view === id ? 'page' : 'false'));
   const main = document.getElementById('main'); clear(main);
+  // Placeholder while the page loads; it disappears as soon as the page adds its first content.
+  const placeholder = skeleton(); main.append(placeholder);
+  const watcher = new MutationObserver(() => { if ([...main.children].some(child => child !== placeholder)) { placeholder.remove(); watcher.disconnect(); } });
+  watcher.observe(main, { childList: true });
+  if (fromNav) main.focus({ preventScroll: true }); // keyboard and screen-reader users land on the new page
   try { await VIEWS[id](main); } catch (e) { showError(main, e); }
+  placeholder.remove(); watcher.disconnect();
 }
 function pageHead(title, subtitle, ...toolbar) {
   return h('div', { class: 'page-head' }, h('div', {}, h('h1', {}, title), subtitle ? h('p', { class: 'muted small' }, subtitle) : null), h('div', { class: 'toolbar' }, ...toolbar));
@@ -276,40 +235,160 @@ VIEWS.timesheets = async main => {
 };
 
 // ---------- screenshots ----------
+const bytesLabel = n => { n = Number(n) || 0; if (n < 1024) return `${n} B`; const units = ['KB', 'MB', 'GB', 'TB']; let i = -1; do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1); return `${n >= 100 ? Math.round(n) : n.toFixed(1)} ${units[i]}`; };
+const dateOnly = iso => iso ? new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+
 VIEWS.screenshots = async main => {
-  const { users, options } = await userOptions();
+  const { users, options } = await userOptions(); const { options: projectOpts } = await projectOptions();
   const range = rangeControls(3); const person = select(options, '');
-  const host = h('div', {}); const limit = select([['60', '60 newest'], ['120', '120 newest'], ['200', '200 newest']], '60');
+  const project = select([['', 'Any project'], ...projectOpts.filter(([v]) => v)], '');
+  const groupBy = select([['day', 'Group by day'], ['person', 'Group by person']], 'day');
+  const canDelete = isLead() || (me.user.role !== 'hr' && me.policy.allowEmployeeDelete);
+  const summaryHost = h('div', {}), barHost = h('div', {}), host = h('div', {}), more = h('div', { class: 'load-more' });
+  let shots = [], hasMore = false, selecting = false; const selected = new Set();
   const observer = new IntersectionObserver(entries => entries.forEach(async entry => {
     if (!entry.isIntersecting) return; observer.unobserve(entry.target);
     try { entry.target.src = await blobUrl(`/api/screenshots/${entry.target.dataset.id}/${entry.target.dataset.thumb === '1' ? 'thumb' : 'image'}`); } catch { entry.target.alt = 'Image unavailable'; }
   }), { rootMargin: '200px' });
-  const load = async () => {
-    clear(host);
-    const { from, to } = range.get(); const q = new URLSearchParams({ from, to, limit: limit.value }); if (person.value) q.set('userId', person.value);
-    const { screenshots } = await api('GET', `/api/screenshots?${q}`);
-    if (!screenshots.length) { host.append(h('div', { class: 'card' }, emptyState('No screenshots in this range, or you do not have access to them.'))); return; }
-    const grid = h('div', { class: 'grid' }); let lastDay = '';
-    host.append(h('p', { class: 'muted small' }, `${screenshots.length} screenshots. Viewing someone else's screenshot is recorded in the audit log.`));
-    for (const s of screenshots) {
-      const img = h('img', { class: 'img', alt: `Screenshot at ${dtShort(s.takenAt)}`, 'data-id': s.id, 'data-thumb': s.hasThumb ? '1' : '0' });
-      const card = h('button', { class: 'shot', type: 'button', onclick: () => openShot(s) }, img, h('div', { class: 'cap' }, h('strong', {}, s.userName), dtShort(s.takenAt)));
-      const day = dayLabel(s.takenAt); if (day !== lastDay) { lastDay = day; grid.append(h('h3', { class: 'day-head' }, day)); }
+
+  const loadSummary = async () => {
+    clear(summaryHost);
+    const s = await api('GET', '/api/screenshots/summary?days=14');
+    const oldest = s.byUser.map(x => x.oldestAt).filter(Boolean).sort()[0];
+    summaryHost.append(h('div', { class: 'stats' }, stat('Screenshots you can see', s.total.count.toLocaleString()), stat('Storage used', bytesLabel(s.total.bytes)), stat('Average size', s.total.count ? bytesLabel(s.total.bytes / s.total.count) : '—'), stat('Oldest', dateOnly(oldest)), stat('Auto-delete after', `${s.retentionDays} days`)));
+    if (s.byUser.length > 1) {
+      const max = Math.max(1, ...s.byUser.map(x => x.bytes));
+      summaryHost.append(h('details', { class: 'card' }, h('summary', {}, `Storage by person (${s.byUser.length})`), h('div', { class: 'bars' }, s.byUser.slice(0, 12).map(x => h('div', { class: 'bar-row' }, h('span', {}, x.name), h('div', { class: 'bar-track' }, h('div', { class: 'bar-fill', style: `width:${Math.max(2, Math.round(x.bytes / max * 100))}%` })), h('span', { class: 'num' }, `${x.count} · ${bytesLabel(x.bytes)}`))))));
+    }
+  };
+
+  const query = before => { const { from, to } = range.get(); const q = new URLSearchParams({ from, to, limit: '60' }); if (person.value) q.set('userId', person.value); if (project.value) q.set('projectId', project.value); if (before) q.set('before', before); return q; };
+  const render = () => {
+    clear(host); clear(barHost); clear(more);
+    const delBtn = h('button', { class: 'btn danger small', type: 'button', disabled: selected.size === 0, onclick: () => deleteSelected() }, `Delete selected (${selected.size})`);
+    if (canDelete && shots.length) barHost.append(h('div', { class: 'select-bar' },
+      h('button', { class: `btn small${selecting ? ' primary' : ''}`, type: 'button', onclick: () => { selecting = !selecting; selected.clear(); render(); } }, selecting ? 'Done selecting' : 'Select'),
+      selecting ? h('button', { class: 'btn small', type: 'button', onclick: () => { for (const s of shots) selected.add(s.id); render(); } }, `Select all ${shots.length} shown`) : null,
+      selecting ? h('button', { class: 'btn small', type: 'button', disabled: selected.size === 0, onclick: () => { selected.clear(); render(); } }, 'Clear') : null, selecting ? delBtn : null));
+    if (!shots.length) { host.append(h('div', { class: 'card' }, emptyState('No screenshots match these filters, or you do not have access to them.'))); return; }
+    host.append(h('p', { class: 'muted small' }, `${shots.length} shown${hasMore ? ' (more available)' : ''}. Viewing someone else's screenshot is recorded in the audit log.`));
+    const grid = h('div', { class: 'grid' }); let lastGroup = null;
+    const sorted = groupBy.value === 'person' ? [...shots].sort((a, b) => a.userName.localeCompare(b.userName) || b.takenAt.localeCompare(a.takenAt)) : shots;
+    for (const s of sorted) {
+      const img = h('img', { class: 'img', alt: `Screenshot by ${s.userName} at ${dtShort(s.takenAt)}`, 'data-id': s.id, 'data-thumb': s.hasThumb ? '1' : '0' });
+      const group = groupBy.value === 'person' ? s.userName : dayLabel(s.takenAt);
+      if (group !== lastGroup) { lastGroup = group; grid.append(h('h3', { class: 'day-head' }, group)); }
+      const card = h('button', { class: `shot${selected.has(s.id) ? ' selected' : ''}`, type: 'button', 'aria-pressed': selecting ? String(selected.has(s.id)) : null, onclick: () => { if (selecting) { selected.has(s.id) ? selected.delete(s.id) : selected.add(s.id); render(); } else openShot(shots.indexOf(s)); } },
+        img, selecting ? h('span', { class: 'tick' }, selected.has(s.id) ? '✓' : '') : null, h('div', { class: 'cap' }, h('strong', {}, s.userName), groupBy.value === 'person' ? dtShort(s.takenAt) : `${timeOnly(s.takenAt)} · ${bytesLabel(s.bytes)}`));
       grid.append(card); observer.observe(img);
     }
     host.append(grid);
+    if (hasMore) more.append(h('button', { class: 'btn', type: 'button', onclick: async ev => { ev.target.disabled = true; try { await loadMore(); } catch (e) { showError(main, e); } } }, 'Load more'));
   };
-  const openShot = async s => {
-    const img = h('img', { class: 'full', alt: `Screenshot by ${s.userName} at ${dtShort(s.takenAt)}` });
-    const own = s.userId === me.user.id; const mayDelete = own ? me.policy.allowEmployeeDelete : isLead();
-    const dlg = dialog(`${s.userName} · ${dtShort(s.takenAt)}`, [img, h('p', { class: 'muted small' }, `${s.width} × ${s.height} px`)], { wide: true });
+  const load = async () => {
+    selected.clear(); const res = await api('GET', `/api/screenshots?${query()}`); shots = res.screenshots; hasMore = res.hasMore; render();
+    await loadSummary().catch(() => {});
+  };
+  const loadMore = async () => { const res = await api('GET', `/api/screenshots?${query(shots.at(-1).takenAt)}`); shots = shots.concat(res.screenshots); hasMore = res.hasMore; render(); };
+
+  const deleteSelected = () => {
+    const ids = [...selected]; if (!ids.length) return;
+    const reason = h('input', { type: 'text', maxlength: '200', placeholder: 'Optional reason (recorded in the audit log)' });
+    const dlg = dialog(`Delete ${ids.length} screenshot${ids.length === 1 ? '' : 's'}?`, [h('p', {}, 'The images are removed from storage and cannot be restored. Each deletion is recorded in the audit log.'), field('Reason', reason)]);
+    dlg.querySelector('.dialog-actions').append(cancelButton(dlg), h('button', { class: 'btn danger', type: 'button', onclick: async ev => {
+      ev.target.disabled = true;
+      try {
+        let deleted = 0; const skipped = [];
+        for (let i = 0; i < ids.length; i += 100) { const r = await api('POST', '/api/screenshots/bulk-delete', { ids: ids.slice(i, i + 100), reason: reason.value || undefined }); deleted += r.deleted; skipped.push(...r.skipped); }
+        dlg.close(); selecting = false; await load();
+        toast(skipped.length ? `Deleted ${deleted}; ${skipped.length} could not be deleted (${skipped[0].reason})` : `Deleted ${deleted} screenshot${deleted === 1 ? '' : 's'}.`, skipped.length ? 'warn' : 'ok');
+      } catch (e) { ev.target.disabled = false; dlg.fail(e); }
+    } }, 'Delete permanently'));
+  };
+
+  // Full-size viewer with previous/next (also with the arrow keys) over everything loaded so far.
+  const openShot = async index => {
+    let i = index; const s0 = shots[i]; if (!s0) return;
+    const img = h('img', { class: 'full', alt: '' }); const meta = h('p', { class: 'muted small' }); const title = h('span', {});
+    const dlg = dialog('', [img, meta], { wide: true }); dlg.querySelector('h2').append(title);
     const actions = dlg.querySelector('.dialog-actions');
-    if (mayDelete) actions.append(h('button', { class: 'btn danger', type: 'button', onclick: async () => { if (!confirm('Delete this screenshot permanently?')) return; try { await api('DELETE', `/api/screenshots/${s.id}`); dlg.close(); await load(); } catch (e) { dlg.fail(e); } } }, 'Delete screenshot'));
-    actions.append(h('button', { class: 'btn', type: 'button', onclick: () => dlg.close() }, 'Close'));
-    try { img.src = await blobUrl(`/api/screenshots/${s.id}/image`); } catch (e) { dlg.fail(e); }
+    const prev = h('button', { class: 'btn', type: 'button', onclick: () => show(i - 1) }, '← Newer'), next = h('button', { class: 'btn', type: 'button', onclick: () => show(i + 1) }, 'Older →');
+    const del = h('button', { class: 'btn danger', type: 'button', onclick: async () => { const s = shots[i]; if (!confirm('Delete this screenshot permanently?')) return; try { await api('DELETE', `/api/screenshots/${s.id}`); dlg.close(); await load(); } catch (e) { dlg.fail(e); } } }, 'Delete screenshot');
+    const save = h('button', { class: 'btn', type: 'button', onclick: async () => { const s = shots[i]; try { await download(`/api/screenshots/${s.id}/image`, `screenshot-${s.userName.replace(/\W+/g, '-')}-${s.takenAt.slice(0, 19).replace(/[:T]/g, '-')}.${s.format}`); } catch (e) { dlg.fail(e); } } }, 'Download');
+    actions.append(prev, next, save); actions.append(h('span', { class: 'spacer' })); if (canDelete) actions.append(del); actions.append(h('button', { class: 'btn', type: 'button', onclick: () => dlg.close() }, 'Close'));
+    const keys = ev => { if (ev.key === 'ArrowLeft') show(i - 1); else if (ev.key === 'ArrowRight') show(i + 1); };
+    dlg.addEventListener('keydown', keys);
+    async function show(n) {
+      if (n < 0 || n >= shots.length) return; i = n; const s = shots[i];
+      const own = s.userId === me.user.id; del.hidden = !(own ? me.policy.allowEmployeeDelete : isLead());
+      title.textContent = `${s.userName} · ${dtShort(s.takenAt)}`; meta.textContent = `${s.width} × ${s.height} px · ${s.format.toUpperCase()} · ${bytesLabel(s.bytes)} · ${i + 1} of ${shots.length}${hasMore && i === shots.length - 1 ? '+' : ''}`;
+      prev.disabled = i === 0; next.disabled = i === shots.length - 1 && !hasMore; img.alt = `Screenshot by ${s.userName} at ${dtShort(s.takenAt)}`;
+      if (i === shots.length - 1 && hasMore) { try { await loadMore(); next.disabled = false; meta.textContent = meta.textContent.replace(/\+$/, ''); } catch { /* keep what is loaded */ } }
+      try { const url = await blobUrl(`/api/screenshots/${s.id}/image`); if (shots[i] === s) { URL.revokeObjectURL(img.src); img.src = url; } } catch (e) { dlg.fail(e); }
+    }
+    await show(i);
   };
-  main.append(pageHead('Screenshots', 'Screenshots are only captured while the tracker is visibly running.', ...range.nodes, users.length > 1 ? h('label', {}, 'Person', person) : null, h('label', {}, 'Show', limit), h('button', { class: 'btn primary', type: 'button', onclick: () => load().catch(e => showError(main, e)) }, 'Apply')), host);
+
+  const apply = h('button', { class: 'btn primary', type: 'button', onclick: () => load().catch(e => showError(main, e)) }, 'Apply');
+  groupBy.addEventListener('change', render);
+  main.append(pageHead('Screenshots', 'Screenshots are only captured while the tracker is visibly running.', ...range.nodes, users.length > 1 ? h('label', {}, 'Person', person) : null, h('label', {}, 'Project', project), h('label', {}, 'View', groupBy), apply), summaryHost, barHost, host, more);
   await load();
+};
+
+// ---------- admin portal ----------
+/** A small accessible bar chart: rows = [{label, value, title}]. Drawn with SVG, no libraries. */
+function barChart(rows, { label, format = v => String(v), height = 170 }) {
+  const width = 640, pad = { l: 44, r: 8, t: 10, b: 26 }, max = Math.max(1, ...rows.map(r => r.value));
+  const bw = (width - pad.l - pad.r) / Math.max(1, rows.length);
+  const chart = svg('svg', { viewBox: `0 0 ${width} ${height}`, class: 'chart', role: 'img', 'aria-label': `${label}: ${rows.map(r => `${r.label} ${format(r.value)}`).join(', ')}` });
+  for (const f of [0, .5, 1]) {
+    const y = pad.t + (height - pad.t - pad.b) * (1 - f);
+    chart.append(svg('line', { x1: pad.l, x2: width - pad.r, y1: y, y2: y, class: 'grid-line' }), svg('text', { x: pad.l - 6, y: y + 4, class: 'axis', 'text-anchor': 'end' }, document.createTextNode(format(max * f))));
+  }
+  const step = Math.ceil(rows.length / 7);
+  rows.forEach((r, i) => {
+    const bh = (height - pad.t - pad.b) * (r.value / max), x = pad.l + i * bw + bw * .15, y = height - pad.b - bh;
+    chart.append(svg('rect', { x, y, width: bw * .7, height: Math.max(r.value > 0 ? 2 : 0, bh), rx: 3, class: 'bar-fill-svg' }, svg('title', {}, document.createTextNode(r.title || `${r.label}: ${format(r.value)}`))));
+    if (i % step === 0 || i === rows.length - 1) chart.append(svg('text', { x: x + bw * .35, y: height - 8, class: 'axis', 'text-anchor': 'middle' }, document.createTextNode(r.label)));
+  });
+  return chart;
+}
+const shortDay = d => new Date(`${d}T12:00:00Z`).toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+const hoursOf = ms => Math.round(ms / 360000) / 10;
+
+VIEWS.admin = async main => {
+  const days = select([['14', 'Last 14 days'], ['30', 'Last 30 days'], ['60', 'Last 60 days']], '14');
+  const host = h('div', {});
+  const load = async () => {
+    clear(host);
+    const o = await api('GET', `/api/admin/overview?days=${days.value}&tzOffsetMinutes=${tzOffset()}`);
+    if (o.alerts.length) host.append(h('div', { class: 'card' }, h('h2', {}, 'Needs your attention'), h('ul', { class: 'alerts' }, o.alerts.map(a => h('li', { class: a.level }, h('span', {}, a.text), a.view && NAV.some(([id, , show]) => id === a.view && show()) ? h('button', { class: 'btn small', type: 'button', onclick: () => go(a.view) }, 'Open') : null)))));
+    else host.append(h('div', { class: 'banner ok' }, 'Nothing needs attention right now.'));
+    host.append(h('div', { class: 'stats' },
+      stat('Tracking now', `${o.people.live.tracking}`), stat('Paused / offline', `${o.people.live.paused} / ${o.people.live.offline}`), stat('Hours today', dur(o.time.todayMs)), stat('Hours, last 7 days', dur(o.time.last7Ms)),
+      stat('Awaiting approval', `${o.approvals.pending}`), stat('People', `${o.people.active}`), stat('Screenshots stored', o.screenshots.total.toLocaleString()), stat('Storage used', bytesLabel(o.screenshots.bytes))));
+    host.append(h('div', { class: 'cols' },
+      h('div', { class: 'card' }, h('h2', {}, 'Tracked hours per day'), barChart(o.time.trend.map(d => ({ label: shortDay(d.date), value: hoursOf(d.trackedMs), title: `${shortDay(d.date)}: ${dur(d.trackedMs)} tracked, ${dur(d.idleMs)} idle (estimate)` })), { label: 'Tracked hours per day', format: v => `${Math.round(v * 10) / 10}h` })),
+      h('div', { class: 'card' }, h('h2', {}, 'Screenshots per day'), barChart(o.screenshots.trend.map(d => ({ label: shortDay(d.date), value: d.count, title: `${shortDay(d.date)}: ${d.count} screenshots, ${bytesLabel(d.bytes)}` })), { label: 'Screenshots per day', format: v => String(Math.round(v)) }))));
+    const bars = (title, rows) => { const max = Math.max(1, ...rows.map(r => r.trackedMs)); return h('div', { class: 'card' }, h('h2', {}, title), rows.length ? h('div', { class: 'bars' }, rows.map(r => h('div', { class: 'bar-row' }, h('span', {}, r.name), h('div', { class: 'bar-track' }, h('div', { class: 'bar-fill', style: `width:${Math.max(2, Math.round(r.trackedMs / max * 100))}%` })), h('span', { class: 'num' }, dur(r.trackedMs))))) : emptyState('No tracked time in this period.')); };
+    host.append(h('div', { class: 'cols' }, bars('Most tracked time (people)', o.time.topPeople), bars('Tracked time by project', o.time.byProject)));
+    const s = o.screenshots;
+    host.append(h('div', { class: 'cols' },
+      h('div', { class: 'card' }, h('h2', {}, 'Screenshot storage and retention'),
+        h('dl', { class: 'facts' }, ...[['Stored', `${s.total.toLocaleString()} screenshots · ${bytesLabel(s.bytes)}`], ['Image format', s.imageFormat.toUpperCase()], ['Auto-delete after', `${s.retentionDays} days`], ['Oldest', dateOnly(s.oldestAt)], ['Newest', s.newestAt ? dtShort(s.newestAt) : '—'], ['Last automatic purge', s.lastPurgeAt ? dtShort(s.lastPurgeAt) : 'None yet']].flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])),
+        s.topStorage.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Largest storage', 'Screenshots', 'Size'].map((t, i) => h('th', { class: i ? 'num' : '' }, t)))), h('tbody', {}, s.topStorage.map(x => h('tr', {}, h('td', {}, x.name), h('td', { class: 'num' }, x.count.toLocaleString()), h('td', { class: 'num' }, bytesLabel(x.bytes))))))) : null,
+        h('div', { class: 'dialog-actions' }, h('button', { class: 'btn primary', type: 'button', onclick: () => go('screenshots') }, 'Manage screenshots'))),
+      h('div', { class: 'card' }, h('h2', {}, 'System and activity'),
+        h('dl', { class: 'facts' }, ...[
+          ['UFS People directory', o.directory.enabled ? `${o.directory.host} · last sync ${o.directory.lastStatus ?? 'none'}${o.directory.lastSuccessAt ? ` (ok ${dtShort(o.directory.lastSuccessAt)})` : ''}` : 'Not connected (local accounts only)'],
+          ['People from the directory', `${o.people.fromDirectory} of ${o.people.active}`], ['Signed-in devices', `${o.devices.active} active · ${o.devices.stale} unseen for 14 days`],
+          ['Accepted current notice', `${o.people.active - o.people.withoutConsent} of ${o.people.active}`], ['Audit events, last 24 h', `${o.audit.last24h} (${o.audit.views24h} screenshot views, ${o.audit.deletions24h} deletions)`]].flatMap(([k, v]) => [h('dt', {}, k), h('dd', {}, v)])),
+        h('div', { class: 'dialog-actions' }, h('button', { class: 'btn', type: 'button', onclick: () => go('audit') }, 'Open audit log'), h('button', { class: 'btn', type: 'button', onclick: () => go('people') }, 'Open people')))));
+    host.append(h('p', { class: 'muted small' }, `${o.note} Updated ${dtShort(o.generatedAt)}.`));
+  };
+  main.append(pageHead('Admin portal', 'Organization-wide numbers: people, time, approvals, screenshots and system health.', h('label', {}, 'Period', days), h('button', { class: 'btn primary', type: 'button', onclick: () => load().catch(e => showError(main, e)) }, 'Refresh')), host);
+  days.addEventListener('change', () => load().catch(e => showError(main, e)));
+  await load(); registerTimer(setInterval(() => load().catch(() => {}), 60000));
 };
 
 // ---------- reports ----------
@@ -422,11 +501,12 @@ VIEWS.people = async main => {
     const [{ users }, { teams }, dirStatus, dirLog] = await Promise.all([api('GET', '/api/users'), api('GET', '/api/teams'), api('GET', '/api/directory/status'), api('GET', '/api/directory/log?limit=5')]);
     const byId = Object.fromEntries(users.map(u => [u.id, u])); const teamName = id => teams.find(t => t.id === id)?.name ?? '—';
     host.append(directoryCard(dirStatus, dirLog.entries));
-    host.append(h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, ['Name', 'Email', 'Role', 'Manager', 'Team', 'Status', 'Source', ''].map(t => h('th', {}, t)))),
-      h('tbody', {}, users.map(u => h('tr', {}, h('td', {}, u.name), h('td', {}, u.email), h('td', {}, badge(u.role, u.role === 'employee' ? '' : 'info')), h('td', {}, u.managerId ? byId[u.managerId]?.name ?? '—' : '—'), h('td', {}, teamName(u.teamId)),
+    host.append(h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, h('table', { class: 'people-table' }, h('thead', {}, h('tr', {}, ['Name', 'Email', 'Role', 'Manager', 'Team', 'Status', 'Source', ''].map(t => h('th', {}, t)))),
+      h('tbody', {}, users.map(u => h('tr', {}, h('td', {}, u.name), h('td', { class: 'truncate', title: u.email }, u.email), h('td', {}, badge(u.role, u.role === 'employee' ? '' : 'info')), h('td', {}, u.managerId ? byId[u.managerId]?.name ?? '—' : '—'), h('td', {}, teamName(u.teamId)),
         h('td', {}, u.active ? (u.mustChangePassword ? badge('invited', 'warn') : badge('active', 'ok')) : badge('inactive', 'bad')),
         h('td', {}, u.source === 'directory' ? badge('UFS People', 'info') : badge('local')),
-        h('td', {}, h('div', { class: 'actions' }, u.source === 'directory' ? h('button', { class: 'btn small', type: 'button', disabled: true, title: 'Name, role, manager, team and status are managed in UFS People' }, 'Managed in UFS People') : [h('button', { class: 'btn small', type: 'button', onclick: () => userDialog(u, users, teams) }, 'Edit'), h('button', { class: 'btn small', type: 'button', onclick: () => resetDialog(u) }, 'Reset password')], h('button', { class: 'btn small', type: 'button', onclick: async () => { try { const r = await api('POST', `/api/users/${u.id}/revoke-sessions`); host.prepend(banner('ok', `Signed ${u.name} out of ${r.revoked} session(s).`)); } catch (e) { showError(main, e); } } }, 'Sign out everywhere'))))))))));
+        h('td', { class: 'actions-cell' }, h('div', { class: 'actions' }, u.source === 'directory' ? h('button', { class: 'btn small', type: 'button', disabled: true, title: 'Name, role, manager, team and status are managed in UFS People' }, 'Managed in UFS People') : h('button', { class: 'btn small', type: 'button', onclick: () => userDialog(u, users, teams) }, 'Edit'),
+          rowMenu([...(u.source === 'directory' ? [] : [{ label: 'Reset password', onclick: () => resetDialog(u) }]), { label: 'Sign out everywhere', onclick: async () => { try { const r = await api('POST', `/api/users/${u.id}/revoke-sessions`); host.prepend(banner('ok', `Signed ${u.name} out of ${r.revoked} session(s).`)); } catch (e) { showError(main, e); } } }]))))))))));
     host.append(h('div', { class: 'card' }, h('h2', {}, 'Teams'), h('div', { class: 'actions' }, teams.map(t => badge(t.name, 'info')), h('button', { class: 'btn small', type: 'button', onclick: teamDialog }, 'Add team'))));
   };
   const userDialog = (u, users, teams) => {

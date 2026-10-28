@@ -321,9 +321,33 @@ export function trackerRoutes(ctx: Ctx) {
     if (userId && !mayViewShots(u, userId, policyOf)) throw new HttpError(403, 'You cannot view this user\'s screenshots.');
     const from = req.query.from ? isoDate(req.query.from, 'from') : null, to = req.query.to ? isoDate(req.query.to, 'to') : null;
     const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 60) || 60));
-    const rows = ctx.db.prepare(`SELECT s.*, u.name user_name FROM screenshots s JOIN users u ON u.id = s.user_id WHERE s.deleted_at IS NULL AND (? IS NULL OR s.user_id = ?) AND (? IS NULL OR s.taken_at >= ?) AND (? IS NULL OR s.taken_at < ?) ORDER BY s.taken_at DESC LIMIT 2000`)
-      .all(userId, userId, from, from, to, to) as Row[];
-    send(res, 200, { screenshots: rows.filter(x => mayViewShots(u, x.user_id, policyOf)).slice(0, limit).map(shotOut) });
+    const projectId = req.query.projectId ? String(req.query.projectId) : null;
+    const before = req.query.before ? isoDate(req.query.before, 'before') : null; // cursor: the takenAt of the last item already shown
+    const rows = ctx.db.prepare(`SELECT s.*, u.name user_name FROM screenshots s JOIN users u ON u.id = s.user_id WHERE s.deleted_at IS NULL AND (? IS NULL OR s.user_id = ?) AND (? IS NULL OR s.taken_at >= ?) AND (? IS NULL OR s.taken_at < ?) AND (? IS NULL OR s.taken_at < ?)
+      AND (? IS NULL OR EXISTS (SELECT 1 FROM time_entries e WHERE e.user_id = s.user_id AND e.client_id = s.entry_client_id AND e.project_id = ?)) ORDER BY s.taken_at DESC LIMIT 5000`)
+      .all(userId, userId, from, from, to, to, before, before, projectId, projectId) as Row[];
+    const visible = rows.filter(x => mayViewShots(u, x.user_id, policyOf));
+    send(res, 200, { screenshots: visible.slice(0, limit).map(shotOut), hasMore: visible.length > limit });
+  });
+
+  // Counts and storage the caller may see (same visibility rules as the list), for the screenshot manager.
+  r.get('/api/screenshots/summary', (req, res) => {
+    const u = currentUser(res);
+    const policyOf = subjectPolicy();
+    const days = Math.min(60, Math.max(7, Math.round(Number(req.query.days ?? 14)) || 14));
+    const since = new Date(nowMs() - days * DAY).toISOString();
+    const perUser = (ctx.db.prepare(`SELECT s.user_id, u.name, COUNT(*) c, COALESCE(SUM(s.bytes),0) b, MIN(s.taken_at) oldest, MAX(s.taken_at) newest FROM screenshots s JOIN users u ON u.id = s.user_id WHERE s.deleted_at IS NULL GROUP BY s.user_id`).all() as Row[])
+      .filter(x => mayViewShots(u, x.user_id, policyOf));
+    const recent = (ctx.db.prepare('SELECT user_id, taken_at, bytes FROM screenshots WHERE deleted_at IS NULL AND taken_at >= ?').all(since) as Row[]).filter(x => mayViewShots(u, x.user_id, policyOf));
+    const byDay = new Map<string, { date: string; count: number; bytes: number }>();
+    for (let i = days - 1; i >= 0; i--) { const d = new Date(nowMs() - i * DAY).toISOString().slice(0, 10); byDay.set(d, { date: d, count: 0, bytes: 0 }); }
+    for (const x of recent) { const d = byDay.get(String(x.taken_at).slice(0, 10)); if (d) { d.count++; d.bytes += Number(x.bytes); } }
+    const total = perUser.reduce((t, x) => ({ count: t.count + Number(x.c), bytes: t.bytes + Number(x.b) }), { count: 0, bytes: 0 });
+    send(res, 200, {
+      total, days,
+      byUser: perUser.map(x => ({ userId: x.user_id, name: x.name, count: Number(x.c), bytes: Number(x.b), oldestAt: x.oldest, newestAt: x.newest })).sort((a, b) => b.bytes - a.bytes),
+      byDay: [...byDay.values()], retentionDays: effectivePolicy(ctx.db, u).retentionDays,
+    });
   });
 
   const loadShot = (req: { params: Record<string, any> }, res: any) => {
@@ -343,16 +367,36 @@ export function trackerRoutes(ctx: Ctx) {
   r.get('/api/screenshots/:id/image', serveShot(false));
   r.get('/api/screenshots/:id/thumb', serveShot(true));
 
-  r.delete('/api/screenshots/:id', async (req, res) => {
-    const { u, row } = loadShot(req, res);
+  /** Same rules for one or many: owners may delete their own if policy allows; admins and managers (within scope) may delete others'. */
+  const deleteShot = async (u: AuthUser, row: Row, reason?: string) => {
     const own = row.user_id === u.id;
     if (own && !effectivePolicy(ctx.db, u).allowEmployeeDelete) throw new HttpError(403, 'Your organization does not allow deleting your own screenshots.');
     if (!own && !(isAdmin(u) || u.role === 'manager')) throw new HttpError(403, 'You cannot delete this screenshot.');
     // Remove the stored object first: if the store fails the record stays visible and the delete can be retried.
     await ctx.store.remove(row.user_id, row.file_name); if (row.thumb_file_name) await ctx.store.remove(row.user_id, row.thumb_file_name);
     ctx.db.prepare('UPDATE screenshots SET deleted_at = ?, deleted_by = ? WHERE id = ?').run(nowIso(nowMs()), u.id, row.id);
-    audit(ctx.db, ctx.cfg, u.id, 'screenshot.deleted', 'screenshot', row.id, { ownerId: row.user_id });
+    audit(ctx.db, ctx.cfg, u.id, 'screenshot.deleted', 'screenshot', row.id, { ownerId: row.user_id, ...(reason ? { reason } : {}) });
+  };
+  r.delete('/api/screenshots/:id', async (req, res) => {
+    const { u, row } = loadShot(req, res);
+    await deleteShot(u, row);
     send(res, 200, { ok: true });
+  });
+
+  // Bulk delete for the screenshot manager: at most 100 per call, every item checked and audited on its own, partial success reported.
+  r.post('/api/screenshots/bulk-delete', async (req, res) => {
+    const u = currentUser(res);
+    const body = parse(z.object({ ids: z.array(z.string().regex(/^[A-Za-z0-9-]{8,64}$/)).min(1).max(100), reason: z.string().trim().max(200).optional() }), req.body);
+    const policyOf = subjectPolicy();
+    const deleted: string[] = [], skipped: { id: string; reason: string }[] = [];
+    for (const id of new Set(body.ids)) {
+      const row = ctx.db.prepare('SELECT * FROM screenshots WHERE id = ? AND deleted_at IS NULL').get(id) as Row | undefined;
+      if (!row || !mayViewShots(u, row.user_id, policyOf)) { skipped.push({ id, reason: 'Not found.' }); continue; }
+      try { await deleteShot(u, row, body.reason); deleted.push(id); }
+      catch (error) { skipped.push({ id, reason: error instanceof HttpError ? error.message : 'The stored file could not be removed; try again.' }); }
+    }
+    if (deleted.length) audit(ctx.db, ctx.cfg, u.id, 'screenshot.bulk_deleted', 'screenshot', undefined, { count: deleted.length, skipped: skipped.length, ...(body.reason ? { reason: body.reason } : {}) });
+    send(res, 200, { deleted: deleted.length, skipped });
   });
 
   return r;

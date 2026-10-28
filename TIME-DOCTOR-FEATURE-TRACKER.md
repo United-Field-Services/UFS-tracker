@@ -44,6 +44,8 @@ Legend: ✅ done (tested against fakes/synthetic data) · 🟡 partial · ❌ no
 | Real-time notifications for missed hours | S | ❌ | B10 notifications and email |
 | Timeline and hours reports | B/S | ✅ | hours report + CSV; per-day timeline view could be richer |
 | Real-time dashboard | S | ✅ | live status |
+| Admin dashboard with org-wide stats | P | ✅ | Admin portal (2026-10-28): attention list, key numbers, hours and screenshot charts, storage, system health; see `DASHBOARD-AUDIT-AND-PLAN.md` |
+| Screenshot management (browse, filter, bulk delete, storage view) | B | ✅ | screenshot manager (2026-10-28): filters, paging, select and bulk delete with audit, viewer, download |
 | Executive and custom dashboards, BI | P/E | ❌ | later |
 | Custom data exports | S | 🟡 | CSV only; no scheduled email reports (C8) |
 
@@ -72,7 +74,7 @@ Legend: ✅ done (tested against fakes/synthetic data) · 🟡 partial · ❌ no
 | Chrome extension, mobile apps | all | ❌ | A14 |
 
 ## Where we are (counting the rows above)
-Counted from the 43 rows above: **15 done, 7 partial, 17 not started, 4 deliberately not planned.** Of the 39 features we intend to build that is roughly **47% covered** (partials counted as half). The biggest gaps are app/website usage (consented), payroll and integrations, notifications and email, Mac/Linux/mobile, and the premium analytics. The strong side is core time tracking, screenshots, approvals, roles, reports and the HR directory link.
+Counted from the 45 rows above (updated after the Admin portal and screenshot manager): **17 done, 7 partial, 17 not started, 4 deliberately not planned.** Of the 41 features we intend to build that is roughly **50% covered** (partials counted as half). The biggest gaps are app/website usage (consented), payroll and integrations, notifications and email, Mac/Linux/mobile, and the premium analytics. The strong side is core time tracking, screenshots, approvals, roles, reports and the HR directory link.
 
 ## Suggested order (parallel tracks)
 1. **Track A, product:** notifications and email (B10) and scheduled reports (C8); break records (A11); leave/holiday source (C5); then payroll exports and pay rates (B14, C11); data export/deletion (B15).

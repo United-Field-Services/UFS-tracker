@@ -13,6 +13,7 @@ import { reportRoutes } from './routes-reports.ts';
 import { purgeExpiredScreenshots } from './retention.ts';
 import { loadDirectoryConfig, type DirectoryConfig } from './directory.ts';
 import { directoryRoutes } from './routes-directory.ts';
+import { portalRoutes } from './routes-portal.ts';
 import { SupabaseAuth, loadSupabaseConfig } from './supabase-auth.ts';
 
 export interface App { app: express.Express; ctx: Ctx; db: Db; close(): void; }
@@ -56,6 +57,7 @@ export function createApp(overrides: Partial<Config> & { store?: BlobStore; db?:
   authed.use(trackerRoutes(ctx));
   authed.use(reportRoutes(ctx));
   authed.use(directoryRoutes(ctx));
+  authed.use(portalRoutes(ctx));
   authed.post('/api/admin/retention/run', requireRole('owner', 'admin'), async (_req, res) => { res.json({ removed: await purgeExpiredScreenshots(ctx) }); });
   app.use(authed);
 

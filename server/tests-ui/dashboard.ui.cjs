@@ -133,7 +133,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, `ui-${name}.
   {
     const { context, page, problems } = await newSession(browser);
     await login(page, 'admin@demo.example'); await sleep(1500);
-    check('admin nav has everything', (await page.$$eval('.nav button', bs => bs.length)) === 9);
+    check('admin nav has everything', (await page.$$eval('.nav button', bs => bs.length)) === 10);
     await nav(page, 'People'); await shot(page, '11-admin-people');
     await page.click('button:has-text("Add person")'); await sleep(300);
     await page.fill('dialog input[type=email]', 'ui.newhire@demo.example'); await page.fill('dialog input[type=text] >> nth=0', 'UI New Hire'); await page.fill('dialog input[placeholder*="10+"]', 'Temp-hire-pass-77'); await page.click('dialog button:has-text("Create")'); await sleep(1000);
@@ -162,6 +162,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, `ui-${name}.
     await page.locator('.field-row').filter({ hasText: 'Monitoring notice version' }).locator('input[type=number]').fill('2');
     await page.click('button:has-text("Save policy")'); await sleep(400);
     check('activity policy saves when the consent version is raised', (await page.locator('#main').textContent()).includes('Policy saved.'));
+    await sleep(1100); // the editor reloads itself 800 ms after a save; wait so the next edit is not wiped
       const allScreensPolicy = page.locator('.field-row').filter({ hasText: 'Capture all connected screens' });
       await allScreensPolicy.locator('input[type=checkbox]').check(); await page.click('button:has-text("Save policy")'); await sleep(300);
       check('all-screens policy requires a separate monitoring notice version', (await page.locator('#main').textContent()).includes('requires a new monitoring-notice version'));
@@ -200,7 +201,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, `ui-${name}.
     const { context, page, problems } = await newSession(browser);
     await login(page, 'hana@demo.example'); await sleep(1500);
     const navItems = await page.$$eval('.nav button', bs => bs.map(b => b.textContent));
-    check('HR nav: read-only areas only', navItems.join() === 'Overview,Timesheets,Screenshots,Reports,My account', navItems.join());
+    check('HR nav: read-only areas only', navItems.join() === 'Overview,Admin portal,Timesheets,Screenshots,Reports,My account', navItems.join());
     await shot(page, '17-hr-overview');
     const members = await page.$$eval('#main tbody tr td:first-child', tds => tds.map(t => t.textContent));
     check('HR overview shows the whole organization', members.includes('Ana Engineer') && members.includes('Cara Support') && members.includes('Hana HR'), members.length + ' people');
@@ -241,7 +242,7 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, `ui-${name}.
     await page.fill('#login-totp', '000000'); await page.click('button[type=submit]'); await sleep(1500);
     check('a wrong code is refused with a clear message', (await page.textContent('.banner.error')).includes('Incorrect code') && await page.isVisible('#login-totp'));
     await page.fill('#login-totp', await codeFor(emailOf('emp-002'))); await page.click('button[type=submit]'); await sleep(1800);
-    check('the right code signs HR in with the read-only HR menu', (await page.$$eval('.nav button', bs => bs.map(b => b.textContent))).join() === 'Overview,Timesheets,Screenshots,Reports,My account');
+    check('the right code signs HR in with the read-only HR menu', (await page.$$eval('.nav button', bs => bs.map(b => b.textContent))).join() === 'Overview,Admin portal,Timesheets,Screenshots,Reports,My account');
     await page.click('button:has-text("Sign out")'); await sleep(800);
     // a person who has no approved identity gets nothing, even with a Supabase account
     await page.fill('input[type=email]', 'stranger@elsewhere.test'); await page.fill('input[type=password]', FAKE_PW); await page.click('button[type=submit]'); await sleep(1200);
@@ -251,6 +252,69 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, `ui-${name}.
     await context.close();
   }
 
+
+  // ---------- owner: admin portal and screenshot manager ----------
+  {
+    const { context, page, problems } = await newSession(browser);
+    await login(page, 'owner@demo.example'); await sleep(1500);
+    await nav(page, 'Admin portal'); await sleep(1500); await shot(page, '30-admin-portal');
+    const text = await page.textContent('#main');
+    check('admin portal shows attention items, key numbers and both charts', text.includes('Needs your attention') && text.includes('Storage used') && (await page.$$('#main svg.chart')).length === 2 && (await page.$$('#main svg.chart rect')).length > 0);
+    check('admin portal charts are accessible images with a label', (await page.$$eval('#main svg.chart', els => els.every(e => e.getAttribute('role') === 'img' && e.getAttribute('aria-label').length > 10))));
+    check('admin portal states that numbers are aggregates, not productivity or pay', text.includes('productivity, attendance or pay measure'));
+    await page.selectOption('#main select', '30'); await sleep(1200);
+    check('changing the period reloads the portal', (await page.$$('#main svg.chart rect')).length > 20);
+    await page.click('#main button:has-text("Manage screenshots")'); await sleep(1500); await shot(page, '31-screenshot-manager');
+    const mtext = await page.textContent('#main');
+    check('screenshot manager shows storage summary and retention', mtext.includes('Storage used') && mtext.includes('Auto-delete after') && mtext.includes('Screenshots you can see'));
+    check('manager offers project filter, grouping and Load more when there is more', await page.locator('#main label:has-text("Project")').count() === 1 && await page.locator('#main label:has-text("View")').count() === 1);
+    await page.selectOption('#main label:has-text("View") select', 'person'); await sleep(600);
+    check('grouping by person shows person headings', (await page.$$('#main .day-head')).length >= 2);
+    // select mode and bulk delete (cancel first: nothing is deleted)
+    await page.click('#main button:has-text("Select")'); await sleep(300);
+    const before = (await page.$$('#main .shot')).length;
+    await page.locator('#main .shot').nth(0).click(); await page.locator('#main .shot').nth(1).click(); await sleep(300);
+    check('select mode marks cards and counts the selection', await page.locator('#main .shot.selected').count() === 2 && (await page.textContent('#main .select-bar')).includes('Delete selected (2)'));
+    await page.click('#main button:has-text("Delete selected")'); await sleep(500);
+    check('bulk delete asks for confirmation with a reason field', await page.locator('dialog:has-text("Delete 2 screenshots?")').count() === 1);
+    await page.click('dialog button:has-text("Cancel")'); await sleep(300);
+    check('cancelling deletes nothing', (await page.$$('#main .shot')).length === before);
+    await page.click('#main button:has-text("Select all")'); await sleep(300);
+    check('select all marks every shown screenshot', await page.locator('#main .shot.selected').count() === before);
+    await page.click('#main button:has-text("Done selecting")'); await sleep(300);
+    // viewer: next/previous and download button
+    await page.locator('#main .shot').first().click(); await sleep(1200);
+    check('viewer shows position and navigation', (await page.textContent('dialog')).includes('1 of') && await page.locator('dialog button:has-text("Older")').count() === 1 && await page.locator('dialog button:has-text("Download")').count() === 1);
+    await page.keyboard.press('ArrowRight'); await sleep(900);
+    check('arrow keys move to the next screenshot', (await page.textContent('dialog')).includes('2 of'));
+    await page.keyboard.press('Escape'); await sleep(300);
+    // really delete two screenshots through the UI and confirm the totals drop and the audit shows it
+    const totalBefore = Number((await page.textContent('#main .stat strong')).replace(/,/g, ''));
+    await page.click('#main button:has-text("Select")'); await page.locator('#main .shot').nth(0).click(); await page.locator('#main .shot').nth(1).click();
+    await page.click('#main button:has-text("Delete selected")'); await sleep(400);
+    await page.fill('dialog input[type=text]', 'ui test cleanup'); await page.click('dialog button:has-text("Delete permanently")'); await sleep(1800);
+    check('deleting two screenshots shows a success message and lowers the total', (await page.textContent('.toasts')).includes('Deleted 2 screenshots') && Number((await page.textContent('#main .stat strong')).replace(/,/g, '')) === totalBefore - 2);
+    // ---------- design pass: shared components, icons, focus, People actions, menus ----------
+    check('skip link is the first focusable element and targets the main region', await page.locator('.skip-link[href="#main"]').count() === 1 && await page.locator('main#main[tabindex="-1"]').count() === 1);
+    const navCount = await page.locator('.nav button').count();
+    check('every menu item has a decorative icon and its text label is unchanged', await page.locator('.nav button svg.icon[aria-hidden="true"]').count() === navCount && (await page.$$eval('.nav button', bs => bs.every(b => b.textContent.trim().length > 2))));
+    await nav(page, 'People'); await sleep(1500);
+    check('moving to a page by the menu puts focus on the main region', await page.evaluate(() => document.activeElement && document.activeElement.id === 'main'));
+    check('loading placeholders are gone once the page has content', await page.locator('.skeleton-wrap').count() === 0);
+    const fits = await page.evaluate(() => { const wrap = document.querySelector('#main .table-wrap table tbody') ? [...document.querySelectorAll('#main .table-wrap')].find(w => w.querySelector('td.actions-cell')) : null; if (!wrap) return null; const box = wrap.getBoundingClientRect(); return [...wrap.querySelectorAll('td.actions-cell')].every(c => c.getBoundingClientRect().right <= box.right + 1) && wrap.scrollWidth <= wrap.clientWidth + 1; });
+    check('People action buttons fit inside the table without horizontal scrolling', fits === true, String(fits));
+    const row = page.locator('#main tbody tr:has-text("Ana Engineer")').first();
+    check('a local person has Edit plus a More menu holding Reset password and Sign out everywhere', await row.locator('button:has-text("Edit")').count() === 1 && await row.locator('summary:has-text("More")').count() === 1 && await row.locator('.menu-item').count() === 2);
+    await row.locator('summary:has-text("More")').click(); await sleep(300);
+    check('the More menu opens on screen and can be closed with Escape', await row.locator('.menu-item:has-text("Reset password")').isVisible() && await (async () => { await page.keyboard.press('Escape'); await sleep(200); return !(await row.locator('.menu-item:has-text("Reset password")').isVisible()); })());
+    await row.locator('summary:has-text("More")').click(); await row.locator('.menu-item:has-text("Reset password")').click(); await sleep(400);
+    check('choosing a menu item runs its action', await page.locator('dialog:has-text("Reset password for Ana Engineer")').count() === 1);
+    await page.click('dialog button:has-text("Cancel")'); await sleep(200);
+    await nav(page, 'Audit log'); await sleep(1200);
+    check('the bulk deletion and the admin portal view are in the audit log', (await page.textContent('#main')).includes('screenshot.bulk_deleted') && (await page.textContent('#main')).includes('ui test cleanup'));
+    check('no console errors or CSP violations (admin portal)', problems.length === 0, problems.join(' | '));
+    await context.close();
+  }
   // ---------- new hire: forced password change ----------
   {
     const { context, page, problems } = await newSession(browser);
@@ -276,6 +340,12 @@ const shot = (page, name) => page.screenshot({ path: path.join(OUT, `ui-${name}.
     await login(page, 'maria@demo.example'); await sleep(1500); await shot(page, '16-mobile-overview');
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
     check('mobile has no horizontal page scroll', overflow <= 1, `overflow=${overflow}px`);
+    // tables become labelled cards on a phone and nothing scrolls sideways
+    await nav(page, 'Timesheets'); await sleep(1800);
+    const cards = await page.evaluate(() => { const td = document.querySelector('#main tbody td'); if (!td) return null; return { label: td.getAttribute('data-label'), display: getComputedStyle(td).display, overflow: document.documentElement.scrollWidth - window.innerWidth }; });
+    check('on a phone, table cells carry their column label and display as cards', !!cards && cards.label.length > 0 && cards.display === 'flex', JSON.stringify(cards));
+    check('the phone timesheets page has no horizontal scroll', !!cards && cards.overflow <= 1, JSON.stringify(cards));
+    check('the phone menu scrolls sideways instead of wrapping into many rows', await page.evaluate(() => { const n = document.querySelector('.nav'); return getComputedStyle(n).flexWrap === 'nowrap' && getComputedStyle(n).overflowX === 'auto'; }));
     await context.close();
   }
 
