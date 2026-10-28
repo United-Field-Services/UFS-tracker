@@ -1,0 +1,22 @@
+# dependencies and build output
+node_modules/
+source/release/
+source/local-mac-build/
+
+# local-only credentials and disposable data (synthetic staging accounts, demo/staging databases)
+server/.staging-local/
+server/data/
+server/data-*/
+.env*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.p12
+*.p8
+*.mobileprovision
+
+# tooling output
+graphify-out/
+.claude/
+*.log
+.DS_Store

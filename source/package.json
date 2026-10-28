@@ -1,0 +1,59 @@
+{
+  "name": "ufs-desktop-tracker",
+  "productName": "UFS Desktop Tracker",
+  "version": "0.2.0",
+  "description": "Visible, local-only screen capture and time tracking test app",
+  "author": "UFS",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "src/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test tests/*.test.cjs",
+    "check": "node scripts/check-syntax.cjs && npm test",
+    "build:mac": "node scripts/release-preflight.cjs mac && electron-builder --mac dmg --universal --publish never && node scripts/verify-mac-release.cjs",
+    "build:win": "electron-builder --win nsis --x64 --publish never",
+    "build:linux": "electron-builder --linux AppImage --x64 --publish never",
+    "package:mac:local": "node scripts/package-local-mac.cjs"
+  },
+  "devDependencies": {
+    "electron": "44.9.3",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.ufs.desktoptracker.local",
+    "productName": "UFS Desktop Tracker",
+    "directories": { "output": "release" },
+    "files": ["src/**/*", "renderer/**/*", "package.json"],
+    "extraResources": [
+      { "from": "THIRD-PARTY-NOTICES.md", "to": "THIRD-PARTY-NOTICES.md" },
+      { "from": "licenses/uiohook", "to": "licenses/uiohook" }
+    ],
+    "asar": true,
+    "mac": {
+      "target": [{ "target": "dmg", "arch": ["universal"] }],
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "notarize": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": { "NSScreenCaptureUsageDescription": "Save screenshots of screens selected by you or required by organization policy while tracking is visibly running." },
+      "forceCodeSigning": true,
+      "minimumSystemVersion": "13.0",
+      "artifactName": "UFS-Desktop-Tracker-${version}-mac-universal.${ext}"
+    },
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "nsis": { "oneClick": false, "perMachine": false, "allowToChangeInstallationDirectory": true, "include": "build/installer.nsh" },
+    "linux": {
+      "target": "AppImage",
+      "category": "Office",
+      "artifactName": "UFS-Desktop-Tracker-${version}-linux-x64.${ext}",
+      "extraFiles": [{ "from": "build/AppRun", "to": "AppRun" }],
+      "desktop": { "entry": { "Name": "UFS Desktop Tracker", "Comment": "One-hour local screenshot test; requires Linux x64 and X11" } }
+    },
+    "appImage": { "executableArgs": [] }
+  },
+  "dependencies": { "uiohook-napi": "1.5.4" }
+}

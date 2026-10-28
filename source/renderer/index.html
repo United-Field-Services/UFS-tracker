@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>UFS Desktop Tracker</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-mark">U</span><div>UFS <span>DESKTOP TRACKER</span></div></div>
+    <div class="sidebar-label">YOUR WORKSPACE</div>
+    <button class="nav-item selected" data-panel="tracker-panel"><span>◷</span> Time tracker</button>
+    <button class="nav-item" data-panel="gallery-panel"><span>▧</span> Screenshots <b id="nav-count">0</b></button>
+    <button class="nav-item" data-panel="sessions-panel"><span>☷</span> Sessions</button>
+    <div class="local-note"><span class="local-dot"></span> <span id="local-note-title">On this computer only</span><p id="local-note-text">Your time and screenshots stay here. No account needed.</p></div>
+    <button id="folder-sidebar" class="folder-link">Open local data folder ↗</button>
+    <div class="version">Local test · v0.2.0</div>
+  </aside>
+  <main>
+    <header><div><div class="eyebrow">YOUR TIME, YOUR CONTROL</div><h1>Let's make work visible.</h1></div><span id="local-pill" class="local-pill">◈ Local only</span></header>
+    <div id="error" class="error" role="alert" hidden></div>
+    <section id="tracker-panel" class="panel">
+      <div id="work-reminder" class="work-reminder" role="status" aria-live="polite" hidden><p id="work-reminder-text"></p><div class="work-reminder-actions"><button id="work-reminder-dismiss" class="secondary compact" type="button">Remind me later</button><button id="work-reminder-action" class="primary compact" type="button"></button></div></div>
+      <div class="timer-card">
+        <div class="card-top"><span id="status-badge" class="status stopped">● Ready to start</span><span id="capture-count" class="muted">0 screenshots this session</span></div>
+        <div id="timer" class="timer" aria-label="Tracked time">00:00:00</div>
+        <div id="test-limit" class="test-limit"><span>ONE-HOUR TEST</span><strong id="remaining-time">01:00:00</strong><p>First screenshot on start, then every 5 minutes. Stops automatically.</p></div>
+        <p id="status-message" class="timer-message" aria-live="polite">Ready when you are.</p>
+        <div class="controls"><button id="start" class="primary">▶ Start tracking</button><button id="pause" class="secondary" disabled>Ⅱ Pause</button><button id="stop" class="stop" disabled>■ Stop</button></div>
+        <div class="stats"><div><span>TRACKED TIME</span><strong id="tracked-stat">0m 0s</strong></div><div><span>OBSERVED IDLE</span><strong id="idle-stat">0m 0s</strong></div><div><span>NEXT SCREENSHOT</span><strong id="next-stat">Not running</strong></div></div>
+        <p class="metric-note">Idle means no keyboard or mouse input for 60+ seconds. It is an estimate, stays included in tracked time, and does not determine work or pay.</p>
+      </div>
+      <div class="section-title"><h2>Company account</h2><span class="muted">Optional</span></div>
+      <div id="account-card" class="settings-card">
+        <div id="account-error" class="error" role="alert" hidden></div>
+        <div id="account-out">
+          <p class="muted small">Sign in only if your organization gave you a tracker account. Without it, this app stays on this computer and nothing is uploaded.</p>
+          <label class="full-field">Server address<input id="sync-server" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="tracker.your-company.com"></label>
+          <div class="two-fields"><label>Work email<input id="sync-email" type="email" autocomplete="username"></label><label>Password<input id="sync-password" type="password" autocomplete="current-password"></label></div>
+          <label id="totp-row" class="full-field" hidden>Authenticator code<input id="sync-totp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="6-digit code"></label>
+          <div id="account-info" class="notice" hidden></div>
+          <button id="sync-signin" class="primary compact" type="button">Sign in</button>
+        </div>
+        <div id="account-in" hidden>
+          <div class="account-row"><div><strong id="account-who"></strong><p id="account-server" class="muted small"></p></div><span id="sync-status" class="status stopped"></span></div>
+          <p id="sync-detail" class="muted small"></p>
+          <p id="policy-summary" class="small"></p>
+          <div id="manual-time-status" class="notice" aria-live="polite" hidden></div>
+          <div id="consent-notice" class="notice" hidden><strong>Monitoring notice.</strong> <span id="consent-notice-text"></span><button id="accept-consent" class="primary compact" type="button">I have read and accept</button></div>
+          <div class="account-actions"><button id="manual-time-open" class="secondary compact" type="button">Add manual time</button><button id="sync-now" class="secondary compact" type="button">Sync now</button><button id="sync-signout" class="secondary compact" type="button">Sign out</button></div>
+        </div>
+      </div>
+      <div class="section-title"><h2>Set up your session</h2><span id="permission" class="muted">Screen permission checked on start</span></div>
+      <div class="settings-card">
+        <label class="full-field">Session mode<select id="mode"><option value="one-hour">One-hour screenshot test · automatic stop</option><option value="manual">Manual session · stop yourself</option><option value="company" disabled>Company session · synced to your organization</option></select></label>
+        <div id="project-row" class="two-fields" hidden><label>Project<select id="project"></select></label><label>Task<select id="task-pick"></select></label></div>
+        <label class="full-field task-field">What are you working on?<input id="task" maxlength="120" placeholder="e.g. Reviewing the new HR app" value="My screenshot test"></label>
+        <div id="capture-row" class="two-fields"><label>Screen to capture<select id="display"><option value="">Choose a screen…</option></select></label><label>Save a screenshot every<select id="interval"><option value="10">10 seconds · quick test</option><option value="30">30 seconds</option><option value="60">1 minute</option><option value="300" selected>5 minutes · one-hour test</option></select></label></div>
+        <label class="consent"><input id="consent" type="checkbox"><span id="consent-text">I allow screenshots of the screen I select while this app is tracking. I understand anything visible on that screen may be saved locally.</span></label>
+        <div id="privacy-line" class="privacy-line">No audio, keystroke logging, uploads, or automatic startup. Pause, Stop, hiding, minimizing, locking, or quitting stops capture. The one-hour limit includes pauses and sleep; it never restarts itself.</div>
+      </div>
+      <div class="section-title"><h2>Latest screenshot</h2><button class="text-button" data-panel="gallery-panel">View gallery →</button></div>
+      <div id="latest-empty" class="empty-card"><div class="empty-icon">▧</div><h3>Your first screenshot will appear here</h3><p>Choose a screen, give permission, and press Start.<br>The first capture is saved within a few seconds.</p></div>
+      <button id="latest" class="latest" hidden><img id="latest-image" alt="Latest locally saved screenshot"><span id="latest-caption"></span></button>
+    </section>
+    <section id="gallery-panel" class="panel" hidden><div class="section-title"><div><h2>Your screenshots</h2><p class="muted">Real screen captures saved on this computer. Latest 60 shown.</p></div><button id="open-folder" class="secondary compact">Open folder ↗</button></div><div id="gallery-empty" class="empty-card"><div class="empty-icon">▧</div><h3>No screenshots yet</h3><p>Start a tracking session to save your first capture.</p></div><div id="gallery" class="gallery"></div></section>
+    <section id="sessions-panel" class="panel" hidden><div class="section-title"><div><h2>Your sessions</h2><p class="muted">Tracked time includes observed idle time. No payroll calculations.</p></div></div><div id="sessions-empty" class="empty-card"><h3>No completed sessions yet</h3><p>Your stopped sessions will appear here.</p></div><div id="sessions" class="sessions"></div><div id="manual-time-history" hidden><div class="section-title"><div><h2>Manual time submissions</h2><p class="muted">Pending entries await review. Approved time is locked.</p></div></div><div id="manual-time-list" class="manual-time-list"></div></div></section>
+    <footer><span id="storage-path">Loading local storage…</span><span>Capture is always under your control.</span></footer>
+  </main>
+</div>
+<dialog id="manual-time-dialog" aria-labelledby="manual-time-title"><div class="modal-top"><div><strong id="manual-time-title">Add manual time</strong><p class="muted">Submit a missed work period for approval. The server checks date limits, overlaps, and your project access.</p></div><button id="manual-time-close" class="secondary compact" type="button">Close ✕</button></div><div id="manual-time-error" class="error" role="alert" hidden></div><label class="full-field">Work description<input id="manual-task-label" maxlength="120" required placeholder="What work did you do?"></label><div class="two-fields"><label>Start date and time<input id="manual-start" type="datetime-local" required></label><label>End date and time<input id="manual-end" type="datetime-local" required></label></div><div class="two-fields"><label>Project<select id="manual-project"></select></label><label>Task<select id="manual-task"></select></label></div><label class="full-field manual-note-field">Note for reviewer<textarea id="manual-note" maxlength="500" rows="3" placeholder="Optional context for your manager"></textarea></label><div class="manual-entry-actions"><button id="manual-time-submit" class="primary" type="button">Submit time</button></div></dialog>
+<dialog id="idle-review" class="idle-review" aria-labelledby="idle-review-title" aria-describedby="idle-review-description"><h2 id="idle-review-title">Were you working?</h2><p id="idle-review-description">Your computer reported no recent input. Choose whether to keep the time classified as idle.</p><p class="idle-review-time">Idle time since the prompt: <strong id="idle-review-time">0m 0s</strong></p><p class="muted">Keep includes this time in your tracked total. Discard removes only the time classified as idle; time after you returned remains tracked. This app does not record keystrokes or what you typed.</p><div class="idle-review-actions"><button id="idle-discard" class="secondary">Discard idle time</button><button id="idle-keep" class="primary">Keep time</button></div></dialog>
+<dialog id="image-modal"><div class="modal-top"><div><strong id="image-title">Screenshot</strong><p id="image-description" class="muted"></p></div><button id="close-modal" class="secondary compact">Close ✕</button></div><img id="full-image" alt="Full saved screenshot"><div class="modal-bottom"><span>Stored only on this computer</span><button id="reveal-image" class="primary compact">Show original file ↗</button></div></dialog>
+<video id="capture-video" muted playsinline hidden></video><canvas id="capture-canvas" hidden></canvas><canvas id="thumb-canvas" hidden></canvas>
+<script src="app.js"></script>
+</body></html>

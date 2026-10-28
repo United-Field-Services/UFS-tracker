@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Local-only Linux test launcher. Never weakens Chromium's sandbox.
+set -eu
+fail() {
+  printf 'UFS Desktop Tracker: %s\n' "$1" >&2
+  if [ -n "${DISPLAY:-}" ] && command -v zenity >/dev/null 2>&1; then
+    zenity --error --title='UFS Desktop Tracker' --text="$1" 2>/dev/null || true
+  fi
+  exit 1
+}
+[ "$(id -u)" != 0 ] || fail 'Run this app as a normal desktop user, not root.'
+if [ "${ELECTRON_DISABLE_SANDBOX+x}" = x ] || [ "${ELECTRON_RUN_AS_NODE+x}" = x ]; then
+  fail 'Electron environment overrides are present. Open the app in a normal desktop environment with its sandbox enabled.'
+fi
+unset NODE_OPTIONS
+[ "$#" -eq 0 ] || fail 'This test app accepts no command-line flags. Open it normally.'
+[ -n "${DISPLAY:-}" ] || fail 'A graphical X11 desktop is required. A terminal-only machine cannot run this test.'
+if [ "${XDG_SESSION_TYPE:-}" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  fail 'This test build requires an X11 desktop session. Wayland screen selection is not supported.'
+fi
+APPDIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export LD_LIBRARY_PATH="$APPDIR/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+exec "$APPDIR/ufs-desktop-tracker"

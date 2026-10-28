@@ -1,0 +1,36 @@
+UFS DESKTOP TRACKER 0.2.0
+Windows developer review package | Prepared 22 October 2026 (UTC)
+
+THIS IS THE FULL AVAILABLE STANDALONE TRACKER SOURCE, NOT A WINDOWS INSTALLER.
+No .exe or .msi is included. Developers must build and test it on Windows.
+No Windows runtime, installation, screen-capture or signing test has passed yet.
+
+START HERE
+1. Read WINDOWS-DEVELOPER-HANDOFF.md for the exact build steps and limitations.
+2. The source/ folder contains the complete existing standalone app source,
+   package.json, pinned package-lock.json, build configuration and all tests.
+3. On an approved Windows x64 development machine, from source/ run:
+   npm ci
+   npm run check
+   npm run build:win
+4. Review and test the resulting NSIS installer in release/. Do not distribute
+   it to employees until the Windows acceptance checklist is completed.
+
+SCOPE
+This is a visible, local-only screenshot/time-tracking test application.
+It does NOT log in to, upload to, or sync with UFS People. It is not the
+commercial Time Doctor application or a finished Time Doctor replacement.
+UFS People website/frontend/backend integration is not included in this package.
+
+WHAT WAS CHECKED
+All 101 automated checks passed in Linux on 22 October 2026.
+The 8 application/UI source files match the previously delivered Linux 0.2.0
+build. No actual tracking or screenshot session was started for this handoff.
+See verification/ for the test log and provenance; tests do not prove Windows
+support, real screenshots, or a real one-hour run.
+
+PRIVACY
+No employee data, screenshots, sessions, credentials, signing keys, node_modules,
+or prebuilt runtime is included. Only harmless synthetic fixtures exist in tests.
+Use an isolated test display with synthetic content and explicit consent.
+The application has no automatic sending or upload feature.

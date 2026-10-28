@@ -1,0 +1,10 @@
+node_modules/
+release/
+local-mac-build/
+outputs/*.png
+.DS_Store
+*.log
+.env*
+*.p12
+*.p8
+*.mobileprovision

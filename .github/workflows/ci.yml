@@ -1,0 +1,29 @@
+name: ci
+
+# Runs both test suites on every push and pull request. Deployment (CD) is added in a separate workflow once the
+# hosting target is decided; see HOSTING-CLOUDFLARE.md. No secrets are used here: tests run against fakes only.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  server:
+    runs-on: windows-latest
+    defaults: { run: { working-directory: server } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: server/package-lock.json }
+      - run: npm ci
+      - run: npm run check
+
+  desktop:
+    runs-on: windows-latest
+    defaults: { run: { working-directory: source } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm, cache-dependency-path: source/package-lock.json }
+      - run: npm ci
+      - run: npm run check

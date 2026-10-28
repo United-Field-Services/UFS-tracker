@@ -1,0 +1,234 @@
+# PROGRESS
+
+## 2026-10-28 - Git/GitHub, CI, testing heads-up, staging stack, installer rebuilt
+**Status**: Version control and CI are set up; testers have a heads-up doc, a one-command staging stack and a fresh installer. No deployment exists yet.
+
+- **Staging Supabase** `ufs-tracker-staging` now has 24 synthetic users (all identities of the fake feed). All 24 signed in through the tracker's HTTP login against the real service (roles owner 1, hr 2, manager 3, employee 18; authenticator codes for admin/HR). A rate limit of about 30 sign-ins per 5 minutes per IP was found on the real service (tracker answers 503 and recovers).
+- **Added:** `server/start-staging.ps1` and `stop-staging.ps1` (script started the stack correctly; it needs a `-Fresh` flag to reset data), `TESTING-HEADS-UP.md`, `HOSTING-CLOUDFLARE.md`, `.gitignore` (excludes `server/.staging-local/`, data folders, `node_modules/`, `source/release/`), `.github/workflows/ci.yml`.
+- **Git:** `git init -b main`, remote `https://github.com/United-Field-Services/UFS-tracker`. The "no git" rule was replaced at the owner's request. A secret scan of tracked files found only fake dev keys.
+- **Checks today:** server 145/145, desktop 186 pass / 0 fail / 6 skipped (re-run before the installer build). Windows installer rebuilt: `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, 111,881,414 bytes, SHA-256 `B2578F29DB0196D6DB1F28EBA1FAEDEDE647943F4D8E6D37A0CDC7169B4B1B1E`, NotSigned, not installed or run. The dashboard browser suite and the physical-display E2E were not run today.
+- **Cloudflare (read-only look):** account has the production `ufs-people` Worker and `ufs-people-db` D1; R2 is not enabled. Nothing was created or changed.
+- **New requirements recorded** (`REMAINING-WORK.md` 10b): in-place app updates that keep local data (found that the uninstall "delete local data?" macro would also run during an NSIS update and must be skipped when `${isUpdated}`), CI/CD to Cloudflare, release pipeline.
+- **Next:** implement guarded in-place updates (electron-updater, feed from the company server), confirm the first CI run on GitHub, decide the hosting option and enable R2.
+
+## 2026-10-28 - Staging Supabase project created and the tracker's sign-in verified against it
+**Status**: A real, separate staging Supabase project (`ufs-tracker-staging`, `unitedffs Org`, us-east-1) now exists with four SYNTHETIC users. The tracker's Supabase sign-in works against the real service. Nothing real (UFS People project, real people, real directory feed) was used or changed. Details and run steps: `server/STAGING-SUPABASE.md`.
+
+- Verified with the tracker's own `SupabaseAuth` and over HTTP through `POST /api/auth/login` (fake directory feed on port 4311, tracker on 4301, fresh temp data dir): ES256 JWKS verification, claim checks, password grant, TOTP aal1 to aal2 for the admin/HR accounts, live `/user` check, logout, wrong password and wrong code rejected, directory-projected roles owner/hr/manager/employee returned by `/api/me`.
+- Users were created by SQL with ids equal to the fake directory's identity subjects. Credentials and TOTP secrets are only in the local `server/.staging-local/` folder.
+- Supabase security advisor: leaked-password protection is off. Sign-ups are still enabled; turn both settings off in the dashboard (not available through the MCP tool). The project creation returned no cost prompt; check the org's billing page.
+- Not tested: dashboard/desktop UI sign-in against this project, revoked/banned sessions, 429 limits, key rotation. The suites were not re-run in this slice (no code changed; server 145/145 and desktop 186 pass earlier today).
+- Test servers were stopped and the temp data deleted.
+
+## 2026-10-27 - Expired company sessions now retain the queue and show recovery steps
+**Status**: Desktop now explains when the company session expires during tracking, continues local company capture under the existing visible policy, keeps new time/screenshots queued for the same account, and resumes uploads after that account signs in again. The interactive Windows uninstaller now offers an explicit opt-in deletion choice for the local tracker data folder.
+
+- A 401 clears the device token but keeps the cached account identity and its queue. New company time entries and screenshots remain associated with that identity while expired; the sync client does not send anything without a token. Reauthentication resumes the queued uploads. Signing in as another person does not transfer the old queue.
+- The desktop account panel calls out the expired session, shows the waiting item count, explains that uploads are paused, and tells the employee to stop tracking before signing in again. It warns that changing accounts clears the prior account's queue.
+- Regression coverage also confirms an expired all-screens policy keeps the policy notice and hides display selection, and the NSIS configuration asks before deleting only the local tracker data folder (No is the default). Verification: desktop `npm run check` **182 passed, 0 failed, 6 platform-only skips**; server `npm run check` **145/145**, including typecheck. The latest isolated synthetic dashboard browser run remains **72/72**; dashboard code did not change in this slice, and its JavaScript syntax check passes.
+- Rebuilt Windows x64 NSIS installer: `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, 111,880,919 bytes, SHA-256 `94275B9C488F7C519EC467ADA326B0F4C5E692C43597799621979920C86DA30F`, **NotSigned**. ASAR inspection confirms session-expiry recovery and all-screens policy; electron-builder's generated NSIS script includes `build/installer.nsh`, and `npm run build:win` compiled the custom uninstall prompt successfully. Installer was not run or installed.
+- **Still unverified:** physical multi-monitor capture/layout and screen disconnect, packaged Electron startup, interactive install/uninstall choices on a disposable synthetic app-data path, and the desktop real-display E2E. No real employee data or UFS People/Supabase connection was used.
+
+## 2026-10-27 - Capture all connected screens completed in code; synthetic checks and Windows package
+**Status**: The org-policy all-screens flow is implemented end to end in source. The real two-monitor capture check remains open because it requires verifying two physical/display-driver screens on Windows.
+
+- Migration-6 daily rollup triggers delete the last-day rollup before decrementing, avoiding the `slice_count > 0` constraint failure on a delete/update. The unreleased migration was edited in place; any demo database already at schema version 6 must be reseeded to pick up the repaired trigger.
+- `captureAllScreens` is default-off and organization-scope only. Server validation rejects team/person overrides and requires a higher monitoring-notice version before enabling it. Desktop sync and main process apply the organization rule, ignore the employee's selected-screen value, order screens left-to-right, and pause on display add/remove.
+- Renderer requests one stream per authorized screen, joins the video frames side by side into one image (one upload per capture), applies blur to the joined frame before encoding, scales output to a 4096px edge / 16MP bound, hides the picker when policy forces all screens, and updates consent/notice wording. An ended screen pauses and closes the other streams, including when the end happens while another screen permission is pending.
+- Verification: server `npm run check` **145/145, no failures**; desktop `npm run check` **179 passed, 0 failed, 6 platform skips**; synthetic renderer/main tests cover composite order, policy override, screen add/remove, and track end during active capture and startup. The full dashboard browser suite against a fresh synthetic database plus fake UFS People/Supabase services passed **72/72**, including the all-screens notice-version flow and organization-only control.
+- Rebuilt Windows x64 NSIS installer: `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, 111,880,408 bytes, SHA-256 `A390438185FD11A4BCC25AE9E4902B330362407700D1F52E499F92408CE0D295`, **NotSigned**. ASAR inspection confirms the packaged renderer multi-screen path and main-process policy enforcement are present. Installer was not run or installed.
+- **Still unverified:** physical multi-monitor capture/layout, screen disconnect during a real capture, packaged Electron start-up, and install/uninstall behavior. No real UFS People or employee data, external Supabase, or real HR data was used. Continue the remaining items in `REMAINING-WORK.md` after physical-display validation is possible.
+- **Supabase:** Supabase MCP shows two projects (`ufs-newsletter-us` active, one inactive). UFS People's local `.env` holds only `UFS_OWNER_EMAIL`; its Supabase URL/key are not on disk (likely Cloudflare secrets), and project rules forbid real logins/employee data. Nothing was created or changed in Supabase. Open choice for the owner: create a NEW staging project (needs cost approval) or name a safe existing one.
+
+## 2026-10-27 - B11 daily UTC activity rollups added
+**Status**: B11/C6 now has a materialized daily aggregate layer for the opt-in, count-only activity data and a dedicated dashboard report mode. Minute slices remain the source of truth; the rollups do not add any new collected signals.
+
+- Migration 6 backfills `activity_daily_rollups` by user, entry and UTC day. SQLite insert/update/delete triggers keep counts correct in the same transaction; deleting an entry cascades to its rollups. Existing C6 grouped activity reports now read the aggregate table.
+- Added `GET /api/reports/activity/daily` with inclusive UTC dates, grouping by person/project/day, permission scoping, non-owner view audit and CSV export. Dashboard labels UTC explicitly and displays the count-only/no-pay disclaimer.
+- Verification: server typecheck and **144/144** pass, including migration backfill, multiple-day aggregation, trigger decrement and cascade deletion, daily endpoint data/scoping/CSV. Dashboard JavaScript syntax passes. Isolated synthetic browser suite **70/70** passes, including the new daily-report empty state/disclaimer and existing role/directory/TOTP flows. Desktop code did not change in this slice (still **174 passed / 6 platform-only skipped** from the C5 checkpoint).
+- Installer does not need a rebuild because this slice changes only server/database/dashboard files. C5 Windows installer details remain in the preceding progress entry.
+- **Next:** continue remaining items in `REMAINING-WORK.md`; B11 still has no app/website data collection, while email reports, employee exports/deletion, APIs/integrations, and operational setup remain open. Real UFS People/HR data, Supabase and physical-display capture were not used.
+- Synthetic dashboard data and screenshots remain under `%TEMP%` (`ufs-dashboard-b11-*`); fake services were stopped after testing.
+
+## 2026-10-27 - C5 timezone-aware schedule and tracker-evidence report added
+**Status**: C5 is now partial. Schedule policies have an explicit IANA timezone and late-grace threshold; the desktop reminder uses that timezone, and the Reports dashboard has a schedule/tracker-evidence view and CSV.
+
+- Added `GET /api/reports/attendance` for inclusive date ranges up to 31 days. It applies each person's inherited schedule, timezone and grace threshold, includes tracker-origin entries only, scopes users by role, records view/export audit events and reports `tracked`, `late`, `no_tracked_session`, `in_progress` and `upcoming` evidence states.
+- Tracked time within/outside the scheduled interval is explicitly prorated across entry elapsed time. The report says missing tracker data does not establish absence and estimates are not payroll evidence. No leave/holiday feed or authoritative attendance source is connected.
+- Desktop schedule reminders now calculate local wall time in the configured IANA zone. Policy defaults to UTC until UFS sets organization/team/employee schedule zones.
+- Tests: server typecheck and **144/144** pass, including DST gap and repeated-hour tests, access scope, CSV audit and synthetic timezone fixtures. Desktop **174 passed / 6 platform-only skipped**. Full isolated dashboard browser suite **69/69** passes on a fresh synthetic database and fake UFS People/Supabase services. Dashboard JavaScript syntax check passes; an initial syntax error was caught and fixed before the browser run.
+- Rebuilt Windows x64 NSIS installer and inspected packaged ASAR for the timezone-aware renderer: `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, 111,879,324 bytes, SHA-256 `BB03A141ED2ACD31E6F853126608550286A4B24EBC0B69479E52C374590756D6`. Authenticode reports **NotSigned**. It was not installed or launched.
+- **Next:** continue B11 daily rollups and other items in `REMAINING-WORK.md`; resolve external staging, hosting, legal/security and real-hardware requirements only through approved synthetic/test setups. Real UFS People/HR data, real Supabase and physical-display capture were not used.
+- Synthetic dashboard test directories and screenshots remain under `%TEMP%` (`ufs-dashboard-c5-*`); all fake services were stopped after testing. No real data was used.
+
+## 2026-10-27 - C6 dedicated count-only activity estimate report added
+**Status**: The dashboard and API now have a dedicated opt-in activity-estimate report, on top of A11's in-app reminders. This is still a pilot foundation; C5 attendance and full Time Doctor parity remain unfinished.
+
+- Added `GET /api/reports/activity`: groups sampled consented minute aggregates by person, project or day, filters by the requested range, enforces existing role visibility, audits non-owner views and CSV exports, and returns tracked/sample/active seconds, key-down/click counts and a clearly labeled percent estimate. The response states it is not productivity, quality, attendance or pay evidence.
+- The Reports dashboard can switch between hours and activity estimates; the activity view has a no-data state and the same disclaimer. CSV export follows the selected report type.
+- Added API tests for aggregation, consented synthetic slices, manager visibility, cross-team denial, audit events, CSV and invalid grouping. Added a browser assertion for the opt-in estimate and disclaimer. Dashboard's policy-control test continues to cover A11.
+- Checks: server **142/142** with type-check clean; isolated synthetic dashboard **68/68**; JS syntax check passed. Desktop remains **174 passed / 6 platform-only skipped**; A11 reminder, A10 manual-time and A8 idle-review renderer checks passed. Package manifests were unchanged since both audits last returned zero vulnerabilities. No Electron package rebuild was needed because C6 only changes the server/dashboard.
+- **Next:** C5 attendance/lateness/overtime report needs a trusted timezone per employee/schedule. Current `workStartLocal`/`workEndLocal` are device-local reminders and server time entries are UTC instants; the code has no employee IANA timezone to compare them correctly. Decide/implement that source before presenting attendance results. Continue with the other open work in `REMAINING-WORK.md` after that.
+- Isolated browser services and synthetic database used `%TEMP%` and ports 45800–45820; all test services were stopped. Synthetic dashboard databases/screenshots remain in `%TEMP%\ufs-dashboard-a11-20261027`, `%TEMP%\ufs-dashboard-a11-20261027b`, and `%TEMP%\ufs-dashboard-c6-20261027`; the inspected ASAR extraction remains in `%TEMP%\ufs-a11-asar-inspect`. `server/data-demo`, real UFS People, real employee data and real authentication were not used.
+
+## 2026-10-27 - A11 in-app break and schedule reminders implemented; current verified checkpoint
+**Status**: A11 now has policy-controlled in-app break and scheduled-hours reminders, with explicit employee-facing scope. A11 remains partial because there is no reminder while the app is closed, dedicated break record/timesheet, or attendance report. The repository is still an internal UFS pilot foundation, not complete Time Doctor parity or production-ready.
+
+- Admin policy supports `breakReminderMinutes` (0 disables; default 60), `workScheduleEnabled` (default off), selected weekdays and local start/end times. Settings inherit org > team > user; server rejects invalid effective ranges atomically. The dashboard displays these settings and the employee account page explains the prompts in the current monitoring notice.
+- Desktop prompts after the configured amount of company tracked time; pausing or dismissing never edits elapsed time. Employees may pause for a break or snooze for 10 tracked minutes. Scheduled-hour reminders appear only while the app is open, on configured local weekdays/times while tracking is stopped or paused; employees may start/resume or dismiss for that day. Reminders are gated by sign-in and current notice, never auto-start or auto-pause tracking, and do not collect extra activity data.
+- Fixed safe fallback for malformed `workDays` policy values. Updated the dashboard browser assertion to cover the expanded 17 policy overrides and A11 weekday/time controls; the first run exposed that the old assertion expected only 12 fields.
+- Verification: desktop **174 passed, 0 failed, 6 platform-only skipped**; server **141/141 passed** including A11 effective-policy validation/rollback; isolated synthetic dashboard **67/67 passed**; synthetic A11 reminders, manual-time and idle-review renderer checks passed; both `npm audit --audit-level=moderate` runs report **0 vulnerabilities**. JavaScript syntax checks passed.
+- Rebuilt Windows x64 NSIS installer: `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, **111,879,168 bytes**, SHA-256 `2D5B44283D0804D4ECD3100CC3E5E8EF86C70532587C9FC38E5CA1F61AABE2F3`. The ASAR was extracted to a temporary inspection folder and contains the A11 renderer/sync fields; unpacked resources contain the Windows x64 `uiohook-napi` binary and bundled notices/license texts. Authenticode is **NotSigned**. It was not installed or launched.
+- Dashboard test data and fake directory/Supabase services used isolated `%TEMP%` paths and ports 45700–45720. `server/data-demo` was not used. No real UFS People repo/data/login or external service was touched. Physical-display Electron E2E remains unrun because it captures the real display and may erase its configured app-data path; no synthetic display is available.
+- **Next repository work:** C5 attendance/schedule/late/overtime reports using existing tracked sessions and the new schedule policy; then continue C6/C8/B10/B14/C11/B15 and A3/A12/A14/A15 as listed in `REMAINING-WORK.md`. External pilot blockers remain the approved UFS People endpoint, staging Supabase and bucket, hosting/backups, signing, legal/security review, and real hardware acceptance.
+
+## 2026-10-27 - A10 desktop manual time entry completed and verified synthetically
+**Status**: Employees signed into the tracker can submit missed work from the desktop app for server-side approval. This advances parity work; it does not make the system production-ready or complete Time Doctor parity.
+
+- The desktop form captures work description, local start/end time, optional project/task, and reviewer note. It is available only to a signed-in user who accepted the current notice and stopped tracking. Manual submissions show pending/approved/rejected history in Sessions; untrusted notes and descriptions render as text.
+- Manual submissions persist in the encrypted-account-scoped queue, survive restart/offline periods, count as pending uploads, retry with a stable UUID, and are cleared only when the employee confirms force sign-out/discard or switches account. The API accepts idempotent retries and rejects reuse of a request id with changed contents; server overlap, project, date-window, permission, and approval checks remain authoritative.
+- Fixed the restart regression test: `init()` restores the encrypted device session, so retry occurs on the restored session without signing in twice. Added a lost-response retry simulation, local validation coverage, trusted IPC tests, and a synthetic renderer check. The renderer check found and fixed an acknowledgement visibility bug: messages now appear in the signed-in panel.
+- Current checks: desktop **174 passed, 0 failed, 6 platform-only skipped**; server **140/140 passed** (type-check clean); synthetic manual-time renderer **passed**; synthetic idle-review renderer **passed**; both npm audits **0 vulnerabilities**. Dashboard remains **67/67 from its latest isolated synthetic run**; no dashboard code changed in A10.
+- Rebuilt Windows x64 NSIS installer with A10: `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, **111,878,035 bytes**, SHA-256 `EA04F29D5F67948C618A98F5A28FDA61881D4461B702D5112DEF5AB11D38B600`. Verified the ASAR includes the manual-time renderer, IPC and sync API, and the unpacked build includes `uiohook-napi` native files and bundled third-party notices/license texts. Authenticode reports **NotSigned**.
+- Physical-display Electron E2E was not run: it captures the selected physical display and can wipe its configured app-data folder. No synthetic display exists in this environment. The installer was built and inspected, but not installed or run.
+- **Next repository work:** A11 breaks/schedules/reminders, then remaining parity and release-hardening work. External blockers remain UFS People endpoint approval/staging, staging Supabase, private bucket, hosting/backups, legal/security review, real-hardware checks, and production identity/owner decisions. No UFS People repository or real employee data was accessed.
+
+## 2026-10-27 - A9 count-only activity completed and verified synthetically
+**Status**: Implemented the opt-in, privacy-preserving activity estimate across the Windows desktop, sync queue, API/database, and dashboard. The tracker now includes A1-A9 (with A3 and A13 still partial); this remains a pilot foundation, not full Time Doctor parity or production-ready deployment.
+
+- A9 stays off by default. Enabling it requires a higher monitoring-notice version. The native hook counts only key-downs and mouse clicks into bounded minute aggregates; it retains no key identity, typed text, mouse coordinates, app/window/site data, audio or camera data. It runs only during a visible, authorized company tracking session and stops on pause, idle review, stop, lock, sleep, minimize, hide, or quit. Upload authorization is tied to the company time entry and recorded notice version; non-owner report views are audited. The UI calls the resulting activity percentage an estimate.
+- Full checks: desktop **170 passed, 0 failed, 6 platform-only skipped**; server **139/139 passed**; isolated synthetic dashboard **67/67 passed**. Both `npm audit --audit-level=moderate` checks report **0 vulnerabilities**.
+- Built the Windows x64 NSIS installer at `source/release/UFS Desktop Tracker Setup 0.2.0.exe` (**111,875,833 bytes**, SHA-256 `86C68B44B8986099C24E89635B58B9B893C2AE4CC0BD783BDED4CA6D80D15151`). Inspected the unpacked build: `activity.cjs`, `main.cjs`, the Windows x64 native hook binary, the third-party notice and MIT/LGPL texts are included. The installer is unsigned and has not been installed or exercised with OS input.
+- The dashboard browser test now accepts isolated directory/auth endpoint URLs and counts the intentional 422 consent-policy rejection as expected. Its clean run used only temporary synthetic demo data, fake UFS People and fake Supabase, on isolated ports. Screenshots and database are in `%TEMP%\\ufs-tracker-dashboard-a9-run4-tsdiMD`; ordinary `server/data-demo` was not used.
+- The physical-display desktop E2E remains unrun because the configured path captures the real display; no synthetic display was available. Do not run it against a normal desktop or persistent app-data folder.
+- **Next repository work at that checkpoint:** A10 desktop manual time entry (completed in the newer checkpoint above), then A11 schedules/breaks/reminders, A3 release signing/branding/update work, and remaining B/C parity items.
+
+## 2026-10-26 - Added company idle review, applied idle threshold, and reran isolated dashboard suite
+**Status**: Company sessions now apply the configured idle threshold and show an employee keep/discard prompt. This is still an internal pilot foundation, not complete Time Doctor parity.
+
+- Ran `server/tests-ui/dashboard.ui.cjs` against a fresh disposable synthetic database, fake UFS People feed and fake Supabase Auth on isolated local ports. **65/65 passed**, including manager/employee/admin/owner/HR access, directory sync guard/force/recovery, Supabase sign-in and TOTP, audit, and mobile overflow checks. The first attempt omitted the fake directory and stopped at the expected directory-specific locator; the correctly configured full run passed.
+- Fixed desktop policy handling: `idleTimeoutSeconds` was omitted from the normalized sync policy and therefore every company session used the local 60-second default. The desktop now forwards and validates the org-configured 60–3600 second threshold, stores it with the session, and uses it for observed-idle classification. Added coverage for policy parsing, main-process forwarding, threshold classification, invalid values, and policy changes on resume.
+- Implemented A8 in company mode: one prompt per idle period; keep/discard updates tracked and idle totals; screenshots are invalidated during review and wait a full interval after resolution. An unresolved prompt is discarded on pause, stop, and interrupted-session recovery. The notice explains the estimate, choices, and that typed content is not collected.
+- **Files changed for this slice:** `source/src/sync.cjs`, `source/src/main.cjs`, `source/src/tracker.cjs`, `source/src/preload.cjs`, `source/src/storage.cjs`, `source/renderer/{app.js,index.html,style.css}`, `source/tests/{sync.test.cjs,main.test.cjs,company-mode.test.cjs,storage.test.cjs}`, plus current-state docs.
+- Added and ran `source/e2e/idle-review.ui.cjs` with headless Edge and synthetic state: keep and discard UI choices both passed; no display or application data is accessed.
+- The isolated database and browser screenshots are under `%TEMP%\ufs-tracker-dashboard-isolated-20261026b*`; the original `server/data-demo` was not touched. No process was directed at the UFS People repository and no real employee data or credentials were used.
+- Updated `WHAT-TO-BUILD.md` to remove stale MVP claims and record current implemented/partial/open features. `REMAINING-WORK.md` still tracks external integration and physical-screen end-to-end constraints.
+- Current checks after the code change: server **138/138 pass**, desktop **164 pass / 0 fail / 6 platform skips**, renderer-only idle UI test passes, and renderer/company E2E syntax checks pass; dashboard **65/65 pass** from the isolated run. Rebuilt Windows installer: `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, 111,626,880 bytes, SHA-256 `D3FF00A1CF4736BD59B37B040D9FAA1802217EBB72AE2619655925711F602479`, unsigned. Verified the packaged archive contains the idle review state machine and UI. It has not been installed or physical-screen tested.
+
+**Next at that checkpoint**: A9 privacy-preserving activity counts, then A10 desktop manual time. (A9 is completed in the 2026-10-27 checkpoint above.)
+
+## 2026-10-26 - Phase 2b built (Supabase sign-in through the tracker); session paused for handoff
+**Status at that checkpoint**: Built and tested at unit/API/browser level against a **fake Supabase**; follow-up documentation/build/test status is recorded in the newer checkpoint above. Full picture: `HANDOFF.md`; what is left: `REMAINING-WORK.md`; history: `SESSION-LOG.md`; for a new Claude session: `CLAUDE.md` and `NEXT-SESSION-PROMPT.md`.
+
+**What was done**
+- Server: `supabase-auth.ts` (config, strict ES256 verification against the published JWKS with caching, rotation, rate-limited refetch, fail-closed; password grant, TOTP challenge/verify, live `/user` check, logout), `supabase-login.ts` (password, authenticator code required for owner/admin/hr, **identity binding by Supabase `sub`, never email**, live check, own tracker session, temporary Supabase session always closed, nothing from Supabase stored), `fake-supabase.ts` (real keys/TOTP/revocation/hostile tokens), migration 4 (session origin columns, identity `not_before`), directory sync revokes sessions when identities are disabled/moved/removed or cut off by `notBefore`, `/api/auth/config`, UFS People users cannot change a tracker password. **Server 138/138** (26 new Supabase tests: every claim failure, algorithm attacks, key rotation, JWKS outages, all login paths, lockouts, TOTP edge cases, no token or password stored).
+- Dashboard login shows the authenticator-code step when asked. **Browser 65/65.**
+- Desktop: `sync.cjs` sends the code only when asked and flags `mfaRequired`; `main.cjs` returns a prompt instead of an error; renderer has the code field and keeps the password for the second step. **Desktop 163 tests (157 pass, 6 Linux-only skipped).**
+
+**Not done / not run**
+- The new "Phase K" in `source/e2e/company.e2e.cjs` (real desktop sign-in with the code, wrong code, employee, stranger) was written but **never run**; its syntax was not re-verified after a last edit.
+- No Phase 2b docs in `server/README.md` / `DIRECTORY-FEED.md` (the optional `notBefore` identity field is implemented but undocumented there); the **installer was not rebuilt** (current `.exe` predates the Phase 2a/2b desktop changes).
+- Everything real (UFS People endpoint, Supabase project, bucket, hosting, signing, legal review) is still outstanding; see `REMAINING-WORK.md`.
+- The folder is **not under git**.
+
+## 2026-10-26 - Phase 2a done: UFS People directory sync (built and tested against a fake feed)
+**Status**: Completed. **Nothing was connected to UFS People or its Supabase project, and nothing in the UFS People repo was changed.** Open decisions used the recommended answers (SQLite kept, pull-based feed, tracker-side login proxy later).
+
+**What was done**
+- **Feed contract** (`server/DIRECTORY-FEED.md`, written for the UFS People owner): one read-only `GET` with a dedicated bearer secret returning `employees` (id, email, name, managerId, role, active, department, location, title) and `identities` (Supabase `sub` to employee, enabled). Includes what must never be in it and a reviewable implementation sketch using their existing `employees`, `employee_identities` and `loginEligibleSql`.
+- **Sync engine** (`src/directory.ts`, migration 3): tracker users become **projections** of directory people (`source = 'directory'`); the directory owns name, email, role, manager, team (from department) and active state, which are locked in the tracker (409). They have no password. Roles: admin to admin, hr_manager to hr, manager to manager, employee/hiring_manager to employee, unknown to employee (reported); a configured employee id is the tracker owner. Leavers are deactivated (sessions revoked, live status cleared, data kept), returners reactivated; managers linked in a second pass (feed order irrelevant); manager loops and self-management broken and reported; identities stored lower-cased and disabled, never deleted. Local accounts are never touched.
+- **Safety guards** (blocked syncs change nothing and are audited): empty feed; more than 30% deactivations (10+ people); stale (>48 h) or older-than-last feeds; wrong version; duplicates; more than 10% invalid rows; **any sensitive-looking field name** (blocked, name reported, value never echoed). Only an owner can force. Last active owner is protected. Apply is one transaction (a crash rolls back everything and leaks no internals). Email clashes with local accounts never merge accounts. Token never logged, audited or returned; redirects refused; timeouts and size limits.
+- **API + dashboard:** `GET /api/directory/status|log`, `POST /api/directory/sync` (owner-only `force`); People page has a Directory panel (status, counts, warnings, recent syncs, Sync now, owner "Review and force"), a Source column and locked controls for directory people. Scheduler runs at startup and every `DIRECTORY_SYNC_MINUTES` (default 15).
+- **Fake directory** (`src/fake-directory.ts`, synthetic people only): used by the tests and as a dev tool with mutation endpoints; `reset-demo.ps1` starts it and the tracker wired to it.
+- A directory-sensitive-field block-list gap (`personalEmail`) was found by the tests and closed.
+
+**Tests**: server **112/112** (38 new directory tests: config, role mapping, feed validation, sensitive-field blocking, first sync, locks, idempotence, feed ordering, changes, departments/teams and policy, leavers/returners, org-chart visibility with real sessions, every guard, data-quality cases, owner protection, rollback, identities, fetch failures, concurrency, access control, secrets never leaking, scheduler); dashboard browser **57/57** (12 new: directory card, locked rows, hires/leavers/promotions applied, blocked mass change, owner force and recovery); desktop real end-to-end **54/54** re-run against the updated server (no regression).
+
+**Not done (needs your side)**: the UFS People endpoint itself (the boss must approve and build it; see `DIRECTORY-FEED.md`), a staging Supabase project, and the answers in `DECISIONS-AND-PLAN.md`. **Next: Phase 2b** (Supabase sign-in through the tracker: password grant, TOTP for admin/HR, JWT verification via JWKS plus a live session check, identity-binding, no email linking; desktop gets a TOTP field). Until 2b, directory people cannot sign in; the local break-glass owner and demo accounts still can.
+
+## 2026-10-26 - Phase 1 done: S3-compatible storage, HR role, 90-day retention, WebP/PNG policy
+**Status**: Completed and tested. Real AWS S3 / R2 / MinIO / Supabase Storage were NOT exercised (see "Not verified").
+
+**What was done**
+- **Storage:** `BlobStore` is now async. New `S3Store` (AWS SDK v3; works with S3, R2, MinIO, Supabase via endpoint + path-style) chosen by `STORAGE_DRIVER=s3` + `S3_*` env vars (`store-factory.ts`). Disk remains the default. Upload writes the object first and removes it if the DB insert fails; delete/purge remove the object first and keep the record if storage is down, so they are retried and audited (`retention.purged` with `failed` count).
+- **HR role** (migration 2 rebuilds `users` safely with foreign keys paused and verified): sees everyone's users, time, live status, reports and screenshots (visibility policy still applies, every view audited); can never edit, approve, delete or open admin screens. Admins assign it; managers cannot. Dashboard has an HR option and HR views; demo seed has `hana@demo.example`.
+- **Retention default is now 90 days.** Image policy added: `imageFormat` (`webp` default | `png`) and `imageQuality` (40-95, default 80), org > team > user.
+- **WebP end to end:** server validates PNG/WebP by magic bytes and size, serves the right content type; desktop encodes company screenshots in the policy format, makes a small JPEG thumbnail from the same (possibly blurred) pixels, stores both locally (`.webp` + `.thumb.jpg`), uploads both. Because Electron cannot decode WebP, local thumbnails now come from that saved JPEG, which also removes main-thread decoding. Local (non-company) sessions stay lossless PNG.
+- Dependencies: `@aws-sdk/client-s3` added; **zod upgraded to v4** to clear a high-severity advisory (`npm audit` now 0 vulnerabilities).
+- Desktop and dashboard wording now says screenshots are visible to the manager **and HR**.
+
+**Tests**: server **74/74** (new: S3 store vs a fake S3, S3 outage semantics, HR permission matrix, migration, WebP variants/limits, image policy, retention at 60 vs 100 days); dashboard browser **45/45** (new: HR view); desktop unit **153 pass, 0 fail, 6 Linux-only skips** (new: WebP storage + rollback of both files, format/quality/thumbnail/blur in the renderer, policy-driven capture settings, saved-thumbnail gallery, sync of WebP + thumbnails); **real end-to-end 54/54, source and packaged exe** (real WebP capture, HR access, thumbnails, PNG policy, and blur verified by decoding the uploaded screenshots: edge energy 0.10 blurred vs ~4.3 sharp).
+- Measured on a real 1080p desktop: **WebP ~90-104 KB vs PNG ~580-593 KB per screenshot (about 6x smaller)**.
+- Installer rebuilt: `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, 111,625,003 bytes, SHA-256 `5CED141F5C33CAB296E4EB6788294932625CCA1963E510446532A5B899DE65D7`, NotSigned. Not installed over the build already on this PC.
+
+**Not verified / limits**
+- The S3 store is tested only against an in-process fake S3. Smoke-test with your real bucket (AWS, R2, or Supabase S3 endpoint) before relying on it; add the bucket lifecycle rule (retention + 1 day) described in `server/README.md`.
+- WebP screenshots saved before a thumbnail exists (only if the renderer fails to make one) show no local thumbnail; the full image still opens.
+- Older local PNG captures from before this change keep working (thumbnails decoded on demand, 2 per call).
+
+**Next**: Phase 2 (Postgres + read-only link to UFS People + Supabase login) needs the access listed in `DECISIONS-AND-PLAN.md`.
+
+## 2026-10-26 - Backend, manager dashboard and company sync built and tested
+**Status**: Completed for the MVP slice (see "Not done" below). Defaults chosen by me, not yet confirmed by you: standalone TypeScript/Express/SQLite server in `server/` (not inside UFS People), email+password device tokens, screenshots on local disk behind a storage interface, employee + direct manager visibility, 30-day retention, internal use first.
+
+**What was done**
+- `server/`: accounts, 4 roles, device tokens, teams/projects/tasks, org>team>user policy, consent gate, idempotent time sync, manual time + approval/lock rules, screenshot upload/thumb/view/delete with visibility policy, retention purge, live presence, hours report + safe CSV, audit log. **54 API tests pass**, type-check clean.
+- Manager/admin/employee **web dashboard** (`server/public/`). **37 browser checks pass** (Edge): role-limited navigation, scoped data, edit/approve flow, screenshot grid + viewer, reports + CSV download, projects, people, policy, audit, forced password change, consent banner, no console/CSP errors, mobile layout without horizontal scroll.
+- Desktop app: new **company session mode** (`src/tracker.cjs`), **sync client** (`src/sync.cjs`: sign-in, DPAPI-encrypted device token, upload queue with offline retry/backoff, idempotent uploads, heartbeats, clock-clamped time), main-process policy enforcement (interval, screenshots on/off, blur, required project, consent; the renderer cannot override them), UI for account/notice/project picker/sync status with wording that says data leaves the computer. **137 desktop unit tests (131 pass, 6 Linux-only skips)**.
+- **Real end-to-end test** (`source/e2e/company.e2e.cjs`): real Electron + real server + real screen capture, 44 checks, passes on the source run AND on the packaged exe. Covers sign-in errors, consent gating, 10 s policy cadence, thumbnails, manager downloads a real PNG, live status, pause, **server outage with no data loss and automatic drain**, exact local-vs-server screenshot reconciliation, screenshots-off policy (no screen shared), required project, restart stays signed in, token never stored in plain text, sign-out revokes the device token, audit trail.
+- New installer: `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, 111,623,675 bytes, SHA-256 `F7ACE3B36E7B0BA2BDDEB06A455A47CB4F159EA28563689DCE556D408267294C`, **NotSigned**. It was NOT installed over the build already on this PC.
+
+**Bugs found by testing and fixed**
+- Audit action for rejecting time was written as `time.rejectd` (server).
+- Login throttle used the same low limit per IP as per account, so one shared office IP could lock everyone out (now 8 per account, 60 per IP).
+- **Main-process freeze (pre-existing):** every gallery refresh decoded up to 60 full-size screenshots (~4 s with 60 captures), enough to trip the 5 s "timing gap" safety and silently pause tracking. Thumbnails are now cached and capped at 2 per call (stall ~0.2 s), with a regression test.
+- "N items waiting to upload" counted an already-uploaded running entry (sync client).
+- Mobile dashboard overflowed horizontally; missing favicon 404 (dashboard).
+
+**Files changed/added**: `server/**` (new), `source/src/{tracker,main,preload,sync}.cjs`, `source/renderer/{index.html,app.js,style.css}`, `source/tests/{company-mode,sync,main}.test.cjs`, `source/e2e/company.e2e.cjs`, `server/tests-ui/dashboard.ui.cjs`.
+
+**Not done / next steps**
+- Confirm the five open decisions (hosting inside UFS People vs standalone, login method, storage, visibility/retention, internal vs product). Nothing here is deployed.
+- Idle "were you working?" prompt, activity levels, breaks/schedules, app/website usage, payroll/invoicing, notifications, SSO/2FA/password reset, integrations and public API, Mac/Linux verification, signing/icon/auto-update.
+- Pre-rollout: real 60-minute run, sleep/lock/clock-change checks, Windows ACL review, uninstall-deletes-data option, HR/legal review of the notice text, HTTPS deployment + Postgres/object storage, security review.
+- Quitting the app uploads nothing further; unsent items are kept in the local queue and sent at the next launch.
+- A demo server may still be running on 127.0.0.1:4300 (stop it with `Get-NetTCPConnection -LocalPort 4300 | % { Stop-Process -Id $_.OwningProcess }`).
+
+## 2026-10-22 - Installer install / uninstall / reinstall (Windows 11)
+**Status**: Completed
+- Silent per-user install (`/S`) of the unsigned NSIS installer (SHA-256 BD7EEA63...2E9765, verified before running): exit 0, no admin prompt, installed to `%LOCALAPPDATA%\Programs\UFS Desktop Tracker`, Start Menu shortcut + HKCU uninstall entry created, no autostart (Run key) entry, exe is NotSigned.
+- Installed exe: 27/28 e2e checks. The single miss ("resumed before quit") was a 3 s harness wait; re-measured resume latency was 1.2-1.9 s in 5/5 attempts, not reproduced, cause not fully identified.
+- Uninstall (`Uninstall UFS Desktop Tracker.exe /currentuser /S`): program folder, shortcut and registry entry removed. **Local data is NOT removed**: `%APPDATA%\UFS Desktop Tracker` (screenshots + sessions.json) remains after uninstall. Decide whether the uninstaller should offer deletion (privacy) before any employee rollout.
+- Reinstall: launches stopped, previous gallery (5 shots) reappears, no capture on its own over 14 s idle.
+- Test data deleted afterwards. The app is currently left installed on this PC.
+- Not tested: interactive (non-silent) installer wizard, custom install directory, SmartScreen prompt on first run.
+
+## 2026-10-22 - Windows bring-up, testing and fixes
+**Status**: Completed (Windows install/uninstall, long runs, sleep/lock and ACL checks still pending - see below)
+
+**What was done**
+- Extracted the package; `source/` is the app (Electron 44.9.0, Node 24.16.0 / npm 11.6.0 on Windows 11).
+- `npm ci` + `node node_modules/electron/install.js` (the Electron binary was not downloaded by `npm ci` here).
+- `npm run check`: 101 tests, 95 pass, 0 fail, 6 skip (the 6 are Linux-launcher tests, expected on Windows).
+- **Bug fixed (blocker):** on Windows with Electron 44, `getDisplayMedia()` raises permission `media` with `mediaTypes: []`, not `display-capture`. The app denied it, so no capture could ever start ("Permission denied"). `src/main.cjs` now accepts `media` only when `mediaTypes` is empty (camera/mic requests list `video`/`audio` and stay denied), plus the existing gates: trusted window, trusted URL, `starting` phase, deadline not reached. The unit test now mirrors the real runtime and adds camera/mic/other-origin/wrong-phase denials.
+- Small fix: capture-start failure message no longer tells Windows users about macOS "System Settings".
+- Added `source/e2e/lifecycle.e2e.cjs` (real Electron + Playwright; refuses to run without `E2E_WIPE_DATA=1`). Playwright is NOT a project dependency (lockfile untouched).
+- Built `npm run build:win`: `source/release/UFS Desktop Tracker Setup 0.2.0.exe` (111,615,185 bytes), SHA-256 `BD7EEA63AD894D83A627EC28B9D3072D8AC39FAAA430A14A17C077DC1A2E9765`, **NotSigned**, default Electron icon.
+
+**Verified on this Windows machine (real Electron, real screen capture)** - 28/28 checks on the source run AND on the packaged `win-unpacked` exe:
+- No capture at launch; Start blocked without display or consent.
+- Manual mode: first PNG within seconds, 10 s cadence, Pause/Resume/Stop stop and restart saving correctly, tracked time frozen while paused, gallery/full image/session history match files and index.
+- One-hour mode: initial shot, countdown ~59:5x, countdown keeps running during pause (deadline not extended), no catch-up burst on resume.
+- Minimize pauses and restore does not auto-resume; quit finalizes the session and relaunch stays stopped; hard kill marks the session "Interrupted"; second instance exits; zero non-local requests.
+- Both displays (1920x1080 and a 125%-scaled 1536x865) capture.
+- Deadline expiry tested for real in a scaled-down copy (50 s limit, 10 s slots): slots saved, missed slot skipped after a pause, auto-stop at 50.0 s, zero shots afterwards, fresh start creates a new session.
+
+**Files changed**: `source/src/main.cjs`, `source/tests/main.test.cjs`, `source/e2e/lifecycle.e2e.cjs` (new), `PROGRESS.md` (new).
+
+**Next steps / still pending (not verifiable here)**
+- A real full 60-minute run (only the scaled-down expiry and mocked clocks were exercised).
+- Sleep/wake, lock screen, display unplug and Windows clock-change behavior on real hardware.
+- Run the NSIS installer itself: per-user install, uninstall/reinstall, data retention. (Not installed on this machine; the packaged `win-unpacked` build was tested instead.)
+- Windows ACL review of PNGs and `sessions.json` (Unix 0600 modes do not apply).
+- Code signing + app icon (none configured); `npm audit` reports 8 moderate dev-tooling findings (historical, not remediated; `npm audit fix --force` would be a breaking change).
+- Known cosmetic limits: the data path uses `%APPDATA%\UFS Desktop Tracker\Local Tracker Data`; `--user-data-dir` is ignored by the Playwright launcher, which is why the e2e test uses (and wipes) the real folder.
