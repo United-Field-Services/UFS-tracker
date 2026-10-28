@@ -101,8 +101,27 @@ function renderCompany(state) {
 }
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
 function endStream() { activeToken = null; const oldStreams = streams.length ? streams : stream ? [stream] : []; streams = []; captureVideos = []; stream = null; for (const old of oldStreams) old.getTracks().forEach(track => {if (track.readyState !== 'ended') track.stop();}); $('capture-video').srcObject = null; }
+// In-place updates: nothing downloads or installs until the employee clicks, and installing waits until tracking is stopped.
+function renderUpdate(state) {
+  const update = state.update, banner = $('update-banner'), action = $('update-action');
+  $('update-check').disabled = !update || ['checking', 'downloading'].includes(update.status);
+  if (!update || update.status === 'idle') { banner.hidden = true; return; }
+  const stopped = state.phase === 'stopped', version = update.version || 'a new version';
+  const text = {
+    checking: 'Checking for updates…',
+    available: `Version ${version} is available. Updating keeps your local data, sign-in and anything waiting to upload.`,
+    downloading: `Downloading version ${version}… ${update.percent}%`,
+    ready: stopped ? `Version ${version} is downloaded. The app will restart to install it; your local data stays on this computer.` : `Version ${version} is downloaded. Stop tracking to install it.`,
+  }[update.status] || update.message;
+  banner.hidden = !text; $('update-text').textContent = text || '';
+  action.hidden = !['available', 'ready'].includes(update.status);
+  action.textContent = update.status === 'ready' ? 'Restart and install' : 'Download update';
+  action.disabled = update.status === 'ready' && !stopped;
+}
+$('update-check').addEventListener('click', () => api.updateCheck().catch(e => error(clean(e))));
+$('update-action').addEventListener('click', () => (snapshot?.update?.status === 'ready' ? api.updateInstall() : api.updateDownload()).catch(e => error(clean(e))));
 function render(state) {
-  snapshot = state;
+  snapshot = state; renderUpdate(state);
   const sync = state.sync; const company = !!sync?.signedIn;
   // Signed in: every session is a company session (the organization's policy decides interval, screenshots, project list).
   if (company) $('mode').value = 'company'; else if ($('mode').value === 'company') $('mode').value = 'one-hour';

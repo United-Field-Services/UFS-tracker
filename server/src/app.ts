@@ -39,6 +39,16 @@ export function createApp(overrides: Partial<Config> & { store?: BlobStore; db?:
   app.get('/api/health', (_req, res) => { res.json({ ok: true }); });
   app.use(publicRoutes(ctx));
 
+  // Desktop update feed (electron-updater "generic" provider): read-only, public (the installer holds no secrets; the
+  // app verifies the download against the SHA-512 in latest.yml), allow-listed file names only, range requests supported.
+  app.get('/updates/:file', (req, res, next) => {
+    const name = String(req.params.file);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._ -]{0,119}$/.test(name) || name.includes('..') || !/\.(yml|exe|blockmap|sig)$/.test(name)) return next(new HttpError(404, 'Not found.'));
+    res.sendFile(name, { root: cfg.updatesDir, dotfiles: 'deny', maxAge: 0, headers: { 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff' } }, error => {
+      if (error && !res.headersSent) next(new HttpError(404, 'Not found.'));
+    });
+  });
+
   const authed = express.Router();
   authed.use('/api', authenticate(db, cfg), blockUntilPasswordChanged);
   authed.use(accountRoutes(ctx));

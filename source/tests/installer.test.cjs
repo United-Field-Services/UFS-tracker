@@ -16,7 +16,8 @@ test('interactive uninstaller asks before removing only the local tracker data f
   assert.match(script, /!macro customUnInstall/);
   assert.match(script, /MB_YESNO\|MB_ICONQUESTION\|MB_DEFBUTTON2/);
   assert.match(script, /saved screenshots, session history, and pending company uploads/);
-  assert.match(script, /IDNO ufsKeepTrackerData/);
+  assert.match(script, /\/SD IDNO IDNO ufsKeepTrackerData/, 'silent uninstalls keep the data');
+  assert.match(script, /\$\{ifNot\} \$\{isUpdated\}[\s\S]*MessageBox[\s\S]*\$\{endIf\}/, 'an in-place update must never ask about or delete local data');
   assert.match(script, /RMDir \/r "\$APPDATA\\UFS Desktop Tracker\\Local Tracker Data"/);
   assert.doesNotMatch(script, /RMDir \/r "\$APPDATA\\UFS Desktop Tracker"/);
 });

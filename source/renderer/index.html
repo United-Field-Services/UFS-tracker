@@ -15,12 +15,14 @@
     <button class="nav-item" data-panel="sessions-panel"><span>☷</span> Sessions</button>
     <div class="local-note"><span class="local-dot"></span> <span id="local-note-title">On this computer only</span><p id="local-note-text">Your time and screenshots stay here. No account needed.</p></div>
     <button id="folder-sidebar" class="folder-link">Open local data folder ↗</button>
-    <div class="version">Local test · v0.2.0</div>
+    <button id="update-check" class="folder-link" type="button">Check for updates ↻</button>
+    <div class="version" id="app-version">Local test · v0.2.0</div>
   </aside>
   <main>
     <header><div><div class="eyebrow">YOUR TIME, YOUR CONTROL</div><h1>Let's make work visible.</h1></div><span id="local-pill" class="local-pill">◈ Local only</span></header>
     <div id="error" class="error" role="alert" hidden></div>
     <section id="tracker-panel" class="panel">
+      <div id="update-banner" class="work-reminder" role="status" aria-live="polite" hidden><p id="update-text"></p><div class="work-reminder-actions"><button id="update-action" class="primary compact" type="button" hidden></button></div></div>
       <div id="work-reminder" class="work-reminder" role="status" aria-live="polite" hidden><p id="work-reminder-text"></p><div class="work-reminder-actions"><button id="work-reminder-dismiss" class="secondary compact" type="button">Remind me later</button><button id="work-reminder-action" class="primary compact" type="button"></button></div></div>
       <div class="timer-card">
         <div class="card-top"><span id="status-badge" class="status stopped">● Ready to start</span><span id="capture-count" class="muted">0 screenshots this session</span></div>

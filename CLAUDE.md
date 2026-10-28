@@ -1,6 +1,6 @@
 # UFS Time Tracker: project rules for Claude
 
-**Sources of truth:** current behavior is in `source/` and `server/` and their tests; `PROGRESS.md` is the dated evidence log with newest checkpoint first; `HANDOFF.md` is the architecture/current-state map; `REMAINING-WORK.md` is the open-work/blocker list; `WHAT-TO-BUILD.md` is the parity inventory; `DECISIONS-AND-PLAN.md` records locked design choices. Read those before trusting older notes. `SESSION-LOG.md` is historical context.
+**Sources of truth:** current behavior is in `source/` and `server/` and their tests; `PROGRESS.md` is the dated evidence log with newest checkpoint first; `HANDOFF.md` is the architecture/current-state map; `REMAINING-WORK.md` is the open-work/blocker list; `WHAT-TO-BUILD.md` is the parity inventory; `DECISIONS-AND-PLAN.md` records locked design choices. Read those before trusting older notes. `SESSION-LOG.md` is historical context. `TIME-DOCTOR-FEATURE-TRACKER.md` tracks our status against Time Doctor's public feature list (update it with every feature); `TESTING-HEADS-UP.md` is for testers; `HOSTING-CLOUDFLARE.md` is the hosting plan.
 
 ## What this is
 A visible, consent-based, Time Doctor-style tracker for UFS staff: Windows Electron app (`source/`) + Node/TypeScript server and web dashboard (`server/`), being integrated with UFS People (read-only directory feed + Supabase sign-in). Currently built and tested against **fakes** (fake S3, fake UFS People directory, fake Supabase). Nothing real is connected.
@@ -19,10 +19,13 @@ A visible, consent-based, Time Doctor-style tracker for UFS staff: Windows Elect
 - Report outcomes faithfully: say what failed, what was skipped, what was not verified.
 
 ## Commands
-- Server: `cd server && npm run check` (type-check + 145 API tests). Demo stack: `powershell -File server\reset-demo.ps1`. Dashboard browser test: `server\tests-ui\dashboard.ui.cjs` (72 checks; use a temporary synthetic database and endpoint overrides when isolating it).
-- Desktop: `cd source && npm run check` (188 tests, 182 pass and 6 Linux-only skipped); `npm start`; `npm run build:win`.
+- Server: `cd server && npm run check` (type-check + 149 API tests). Demo stack: `powershell -File server\reset-demo.ps1`. Dashboard browser test: `server\tests-ui\dashboard.ui.cjs` (72 checks; use a temporary synthetic database and endpoint overrides when isolating it).
+- Desktop: `cd source && npm run check` (202 tests, 196 pass and 6 Linux-only skipped); `npm start`; `npm run build:win`.
 - Real end to end (real screenshots, wipes `%APPDATA%\UFS Desktop Tracker\Local Tracker Data`): `E2E_WIPE_DATA=1 PW_PATH=<playwright-core> node source\e2e\company.e2e.cjs`.
 - Node 24 required. Playwright is not a project dependency; install `playwright-core` in a **short path** (Windows 260-character limit).
+
+## Desktop updates
+In-place updates use `electron-updater` from the server's `/updates/` feed (`source/src/updater.cjs`). The app downloads only after a click, installs only while tracking is stopped, and accepts only a `latest.yml` signed with the release key (`source/scripts/sign-update-manifest.cjs`; public key in `source/src/update-public-key.cjs`, currently a DEV key; the private key is in the git-ignored `server/.staging-local/`). `source/build/installer.nsh` must keep skipping the data prompt when `${isUpdated}`. Never name the updater in `main.cjs` (a security test forbids it). See `server/README.md`.
 
 ## Gotchas
 - Server TypeScript runs directly (Node type stripping): explicit `.ts` import extensions, no enums or constructor parameter properties. Zod is v4.

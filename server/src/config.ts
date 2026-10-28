@@ -5,6 +5,7 @@ export interface Config {
   dataDir: string;
   dbFile: string;
   screenshotsDir: string;
+  updatesDir: string; // desktop installer feed: latest.yml + installer + blockmap, dropped in by the release process
   webSessionHours: number;
   deviceSessionDays: number;
   now: () => number;
@@ -17,6 +18,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     dataDir,
     dbFile: path.join(dataDir, 'tracker.sqlite'),
     screenshotsDir: path.join(dataDir, 'screenshots'),
+    updatesDir: process.env.TRACKER_UPDATES_DIR ?? path.join(dataDir, 'updates'),
     webSessionHours: 12,
     deviceSessionDays: 90,
     now: () => Date.now(),

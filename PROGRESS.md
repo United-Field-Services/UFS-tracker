@@ -1,5 +1,19 @@
 # PROGRESS
 
+## 2026-10-28 (late) - In-place desktop updates built, signed-manifest check, Time Doctor feature tracker
+**Status**: Installed apps can update in place from the company server, keeping local data. Built and tested locally; no hosted server and no real app-driven update run yet. Uncommitted (commit/push only when asked).
+
+- **Uninstall bug fixed first:** `source/build/installer.nsh` showed the "delete local data?" prompt on every uninstall, including the one an in-place update runs. It now skips when `${isUpdated}` and silent uninstalls keep data (`/SD IDNO`).
+- **Updater:** `source/src/updater.cjs` (`electron-updater` 6.8.11, 0 audit findings): checks after sign-in or on the sidebar "Check for updates" link, downloads only after a click, installs only while tracking is stopped, flushes the upload queue before installing, never auto-installs on quit, no downgrades. Banner in `renderer/index.html` + `app.js` (layout otherwise unchanged); IPC `update-check/download/install`; the update feed is the one exception to the renderer-network block and only for main-process requests to the configured server.
+- **Server:** `GET /updates/:file` serves `latest.yml`, `latest.yml.sig`, `*.exe`, `*.exe.blockmap` from `TRACKER_UPDATES_DIR` (default `<data>/updates`); public, read-only, allow-listed, range requests, no traversal. Release steps in `server/README.md`.
+- **Security review finding addressed (unsigned installer from a configurable server):** release manifests are signed with an Ed25519 key (`source/scripts/sign-update-manifest.cjs`); the app embeds the public key (`source/src/update-public-key.cjs`, a DEVELOPMENT key) and refuses an update unless the signature verifies and the updater's version and SHA-512 equal the signed manifest. Checked with the real `latest.yml` from a build (verified; a tampered copy is refused). Authenticode signing is still open.
+- **Real in-place update test (installer level, this PC):** silent install of 0.2.1, marker file and `sessions.json` created in `%APPDATA%\UFS Desktop Tracker\Local Tracker Data`, then `Setup 0.2.2.exe /S --updated`: version became 0.2.2 and both files survived. A silent uninstall also kept them. Test data was deleted and the app is now **uninstalled** from this PC (an older 0.2.0 test install that predates the fix was replaced; builds before this fix must be uninstalled by hand once).
+- **Tests:** server **149/149** (4 feed tests), desktop **202 tests, 196 pass, 0 fail, 6 skipped** (9 updater tests incl. signature cases, installer guard, update IPC). Not run: dashboard browser suite, physical-display E2E, an installed app downloading from a server.
+- **Installer rebuilt:** `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, 112,206,397 bytes, SHA-256 `746A110205AE8AA9E538BD8BBEAD29DD6FD88E3CC72D4049EDFA3BA29462A597`, NotSigned, not installed or run. Its `app-update.yml` points at a placeholder URL (overridden at runtime).
+- **UI:** the owner reviewed the screen layout and said the current `renderer/index.html` UI is fine; only the update banner and link were added. A temporary preview folder was removed.
+- **Time Doctor tracker:** `TIME-DOCTOR-FEATURE-TRACKER.md` (public sources only): 43 features, 15 done, 7 partial, 17 not started, 4 not planned; about 47% covered; parallel tracks A-D.
+- **Next:** production update-signing key and code-signing certificate; a real app-driven update test on disposable data; hosting (`HOSTING-CLOUDFLARE.md`); CI/CD once hosting exists; then the tracker's Track A features (notifications/email, break records, payroll exports).
+
 ## 2026-10-28 - Git/GitHub, CI, testing heads-up, staging stack, installer rebuilt
 **Status**: Version control and CI are set up; testers have a heads-up doc, a one-command staging stack and a fresh installer. No deployment exists yet.
 

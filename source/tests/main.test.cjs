@@ -88,7 +88,7 @@ async function fixture({clock = {mono: 0, wall: Date.parse('2026-10-18T12:00:00Z
     dialog: {showErrorBox(_title, message) { throw new Error(message); }}
   };
   const context = vm.createContext({
-    require: name => name === 'electron' ? electron : name === './tracker.cjs' ? {Tracker: ClockTracker} : name === './activity.cjs' ? require('../src/activity.cjs') : name === 'uiohook-napi' ? {uIOhook: uiohook} : name === './storage.cjs' ? {LocalStore: Store} : name === './sync.cjs' ? {SyncClient: SyncStub} : name === './clock.cjs' ? {createCaptureClock: options => require('../src/clock.cjs').createCaptureClock({...options, platform: 'linux', read: () => {if (++clockFault.reads >= clockFault.after) throw new Error('Simulated uptime failure'); return `${clock.mono / 1000} 0`;}})} : require(name),
+    require: name => name === 'electron' ? electron : name === './tracker.cjs' ? {Tracker: ClockTracker} : name === './activity.cjs' ? require('../src/activity.cjs') : name === './updater.cjs' ? require('../src/updater.cjs') : name === 'uiohook-napi' ? {uIOhook: uiohook} : name === './storage.cjs' ? {LocalStore: Store} : name === './sync.cjs' ? {SyncClient: SyncStub} : name === './clock.cjs' ? {createCaptureClock: options => require('../src/clock.cjs').createCaptureClock({...options, platform: 'linux', read: () => {if (++clockFault.reads >= clockFault.after) throw new Error('Simulated uptime failure'); return `${clock.mono / 1000} 0`;}})} : require(name),
     __dirname: dirname, process, console, URL, setInterval: fn => { loop = fn; }, clearInterval() {},
     setTimeout(fn, delay) {const id = ++timerId; timers.set(id, {fn, at: clock.mono + delay}); return id;},
     clearTimeout(id) {timers.delete(id);}
@@ -118,6 +118,15 @@ test('main IPC rejects another webContents or frame URL', async () => {
   assert.throws(() => f.invoke('status', null, {...f.event, sender: {}}), /Untrusted/);
   assert.throws(() => f.invoke('status', null, {...f.event, senderFrame: {url: 'file:///tmp/untrusted.html'}}), /Untrusted/);
   assert.equal(f.invoke('status').phase, 'stopped');
+});
+
+test('update IPC accepts only the app window, does nothing in an unpackaged run and cannot install or download without an update', async () => {
+  const f = await fixture();
+  for (const name of ['update-check', 'update-download', 'update-install']) assert.throws(() => f.invoke(name, null, {...f.event, sender: {}}), /Untrusted/, name);
+  assert.equal((await f.invoke('update-check')).status, 'unsupported');
+  await assert.rejects(Promise.resolve().then(() => f.invoke('update-download')), /no update/);
+  await assert.rejects(Promise.resolve().then(() => f.invoke('update-install')), /not been downloaded/);
+  assert.equal(f.invoke('status').update.status, 'unsupported');
 });
 
 test('main start requires explicit consent and an available display', async () => {

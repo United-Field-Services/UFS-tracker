@@ -8,6 +8,7 @@ const {ActivityCounter} = require('./activity.cjs');
 const {LocalStore} = require('./storage.cjs');
 const {createCaptureClock} = require('./clock.cjs');
 const {SyncClient} = require('./sync.cjs');
+const {createUpdater} = require('./updater.cjs');
 const entryPath = path.join(__dirname, '..', 'renderer', 'index.html');
 const entryUrl = pathToFileURL(entryPath).href;
 const captureClock = createCaptureClock({onFailure: message => {
@@ -17,7 +18,7 @@ const captureClock = createCaptureClock({onFailure: message => {
   if (win) broadcast();
 }});
 const tracker = new Tracker({now: captureClock.now});
-let win, store, sync, loop, deadlineTimer, checkpoint = 0, activityCounter = null, uIOhook = null;
+let win, store, sync, updater, loop, deadlineTimer, checkpoint = 0, activityCounter = null, uIOhook = null;
 let quitting = false, quitAllowed = false;
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) app.quit();
@@ -26,7 +27,7 @@ else {
   app.whenReady().then(start).catch(error => { dialog.showErrorBox('Tracker could not open', error.message); app.quit(); });
 }
 function permission() { return process.platform === 'darwin' ? systemPreferences.getMediaAccessStatus('screen') : 'system-managed'; }
-function state() { captureClock.now(); return {...tracker.snapshot(), permission: permission(), platform: process.platform, version: app.getVersion(), directory: store.root, sync: sync ? sync.snapshot() : null}; }
+function state() { captureClock.now(); return {...tracker.snapshot(), permission: permission(), platform: process.platform, version: app.getVersion(), directory: store.root, sync: sync ? sync.snapshot() : null, update: updater ? updater.snapshot() : null}; }
 // Every session save also queues company sessions for upload (a no-op unless signed in to a company server).
 function save(session) { store.saveSession(session); if (sync && session?.mode === 'company') sync.enqueueEntry(session); }
 function persist() { save(tracker.current); }
@@ -81,9 +82,23 @@ async function start() {
     makeThumb: bytes => ({bytes: nativeImage.createFromBuffer(bytes).resize({width: 320}).toJPEG(70), type: 'image/jpeg'}),
   });
   sync.init(); sync.start();
+  // In-place updates from the company server's /updates/ feed: checked on sign-in or on request, downloaded and
+  // installed only after the employee clicks, and never while tracking.
+  updater = createUpdater({
+    isPackaged: app.isPackaged, currentVersion: app.getVersion(), onChange: () => { if (win) broadcast(); },
+    getServerUrl: () => sync?.snapshot().serverUrl,
+    canInstall: () => tracker.phase === 'stopped',
+    prepareToInstall: async () => { clearInterval(loop); clearTimeout(deadlineTimer); if (store) { try { stop(); } catch {} } await flushBeforeExit(); quitAllowed = true; },
+  });
   // The renderer has no network access at all. Company sync runs only here in the main process, and only after
   // the user explicitly signs in to a company server; there are no analytics, update checks or remote content.
-  session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({cancel: !['file:', 'data:', 'devtools:'].includes(new URL(details.url).protocol)}));
+  // The one exception is the installer's update feed on the configured company server, requested by the main process
+  // (never by the page) after the employee asks for it.
+  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    const feed = updater && sync ? updater.feedBase(sync.snapshot().serverUrl) : null;
+    const updateFeed = !!feed && !details.webContentsId && String(details.url).startsWith(feed);
+    callback({cancel: !(['file:', 'data:', 'devtools:'].includes(new URL(details.url).protocol) || updateFeed)});
+  });
   // getDisplayMedia() surfaces as 'display-capture' on some platforms and as 'media' with an EMPTY
   // mediaTypes list on others (observed on Electron 44 / Windows). Camera or microphone requests carry
   // 'video' / 'audio' in mediaTypes and stay denied.
@@ -207,7 +222,10 @@ async function start() {
   // ---- company account (explicit sign-in only) ----
   const idleOnly = () => { if (tracker.phase !== 'stopped') throw new Error('Stop tracking before changing your company account.'); };
   // The server asks for an authenticator code (admin/HR accounts) by answering mfaRequired; that is a prompt, not an error.
-  handle('sync-login', async value => { idleOnly(); try { const snapshot = await sync.login(value || {}); broadcast(); return snapshot; } catch (error) { if (error.mfaRequired) return {mfaRequired: true, message: error.message}; throw error; } });
+  handle('sync-login', async value => { idleOnly(); try { const snapshot = await sync.login(value || {}); broadcast(); if (app.isPackaged) updater.check().catch(() => {}); return snapshot; } catch (error) { if (error.mfaRequired) return {mfaRequired: true, message: error.message}; throw error; } });
+  handle('update-check', () => updater.check());
+  handle('update-download', () => updater.download());
+  handle('update-install', () => updater.install());
   handle('sync-logout', async value => { idleOnly(); const snapshot = await sync.logout({force: value?.force === true}); broadcast(); return snapshot; });
   handle('sync-consent', async () => { const snapshot = await sync.acceptConsent(); broadcast(); return snapshot; });
   handle('sync-now', async () => { await sync.refresh().catch(() => {}); await sync.flush(); broadcast(); return sync.snapshot(); });
@@ -237,6 +255,7 @@ async function start() {
     catch(error) { stopActivity(); tracker.pause(`Tracking paused: ${error.message}`); persist(); broadcast(); }
   }, 1000);
   await win.loadFile(entryPath);
+  if (sync.signedIn && app.isPackaged) updater.check().catch(() => {}); // already signed in from the last run
 }
 app.on('before-quit', event => {
   if (quitAllowed) return;
@@ -245,13 +264,17 @@ app.on('before-quit', event => {
   quitting = true;
   clearInterval(loop); clearTimeout(deadlineTimer);
   if (store) { try { stop(); } catch {} }
+  flushBeforeExit().catch(() => {}).finally(() => { quitAllowed = true; app.quit(); });
+});
+// Best-effort bounded upload of the queued items before the app exits or an update installs; anything unsent stays durable.
+async function flushBeforeExit() {
   const client = sync;
   if (client?.shutdown) client.shutdown(); else client?.stop();
   const deadlineAt = Date.now() + 10_000;
-  (async () => {
+  try {
     if (!client) return;
     while (client.flushing && Date.now() < deadlineAt) await new Promise(resolve => setTimeout(resolve, Math.min(50, deadlineAt - Date.now())));
     if (!client.flushing && Date.now() < deadlineAt) await client.flush({deadlineAt});
-  })().catch(() => {}).finally(() => { if (client?.shutdown) client.shutdown(); else client?.stop(); quitAllowed = true; app.quit(); });
-});
+  } finally { if (client?.shutdown) client.shutdown(); else client?.stop(); }
+}
 app.on('window-all-closed', () => app.quit());

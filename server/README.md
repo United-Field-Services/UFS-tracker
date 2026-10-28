@@ -143,3 +143,14 @@ The dedicated activity report is `GET /api/reports/activity?from=<ISO>&to=<ISO>&
 - Rate limiting covers login only. No malware scanning (images are validated as PNG, served `nosniff`, never as HTML).
 - The retention job runs hourly in-process; there is no external scheduler or legal-hold exception.
 - Data is not encrypted at rest by the app (use disk/volume encryption).
+
+## Desktop app updates (in-place, keeps employee data)
+
+The server hosts the installer feed at `/updates/` (public, read-only, allow-listed names only: `latest.yml`, `*.exe`, `*.exe.blockmap`). Files live in `TRACKER_UPDATES_DIR` (default `<TRACKER_DATA_DIR>/updates`). The desktop app checks `<its server>/updates/latest.yml` after sign-in or when the employee clicks **Check for updates**, asks before downloading, installs only when tracking is stopped, and updates in place: local screenshots, sessions, pending uploads and sign-in stay.
+
+Publish a release:
+1. Bump `version` in `source/package.json` (must be higher than what is installed), then `cd source; npm run build:win`.
+2. Copy `source/release/latest.yml`, `UFS Desktop Tracker Setup <version>.exe` and its `.exe.blockmap` into the updates folder, `latest.yml` last (so clients never see a manifest without its installer).
+3. Installed apps offer the update at their next sign-in or check. Keep the previous installer too until everyone has moved.
+
+Notes: the manifest carries the installer's SHA-512, which the app verifies. Installers are **not yet code-signed**, so Windows SmartScreen warns on the first manual install and the update channel is only as trustworthy as the server and its HTTPS; sign installers before any rollout. Apps installed before 2026-10-28 (builds without the update-safe uninstall script) must be uninstalled once by hand and reinstalled; after that updates are in place.
