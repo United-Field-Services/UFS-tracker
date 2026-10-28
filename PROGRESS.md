@@ -1,5 +1,11 @@
 # PROGRESS
 
+## 2026-10-28 (night) - Pushed to GitHub; updater hardened (installer bytes bound to the signed hash)
+- **Pushed** `main` (3 commits) to `https://github.com/United-Field-Services/UFS-tracker` by the owner. First CI run (`ci` workflow, commit 484bdfa) was in progress when last checked; confirm it passes.
+- **The repository is PUBLIC** (GitHub API: `private: false`). It contains planning/handoff docs and the staging Supabase project ref; no keys, passwords or real data were found before committing (secret scan), and `server/.staging-local/` is git-ignored. Decide whether it should be private; changing it is the owner's call (GitHub: Settings, Danger Zone, Change visibility).
+- **Security review (HIGH) fixed:** the updater now requires exactly one `.exe` entry whose hashes all equal the signed manifest, hashes the downloaded installer and refuses install unless it equals the signed SHA-512 (`source/src/updater.cjs`; 12 updater tests). Desktop **205 tests, 199 pass, 0 fail, 6 skipped**; server 149/149.
+- **Installer rebuilt:** `source/release/UFS Desktop Tracker Setup 0.2.0.exe`, 112,206,671 bytes, SHA-256 `A50BE91E4C9D8DA830BA0358CC6578314987C49EC1B43FFF7462A3F8AD29DC28`, NotSigned, not run. (Supersedes the hash in the entry below.)
+
 ## 2026-10-28 (late) - In-place desktop updates built, signed-manifest check, Time Doctor feature tracker
 **Status**: Installed apps can update in place from the company server, keeping local data. Built and tested locally; no hosted server and no real app-driven update run yet. Uncommitted (commit/push only when asked).
 
