@@ -123,7 +123,7 @@ Once stable: move routes and dashboard into the Next.js app on Cloudflare, track
 - [ ] **CI/CD from GitHub to Cloudflare:** CI (tests on push) exists in `.github/workflows/ci.yml`. CD is blocked on the hosting choice in `HOSTING-CLOUDFLARE.md`: the server cannot run on Workers as is. The Cloudflare account visible to the Claude session holds the production `ufs-people` Worker and `ufs-people-db` D1; **R2 is not enabled** there. Needs from you: decide option 1/2/3, enable R2 (billing), and whether tracker resources live in that same Cloudflare account. Never modify the `ufs-people` resources from this project.
 - [ ] Release pipeline: tag-triggered GitHub Action that builds the signed installer, publishes it and the update feed, and records the SHA-256.
 - [ ] Staging users: more synthetic roles if needed; turn off sign-ups and enable leaked-password protection on `ufs-tracker-staging` (dashboard).
-- [ ] Confirm the first GitHub Actions run passes (Windows runner, Node 24).
+- [x] GitHub Actions `ci` passes on Windows runners (server and desktop) as of commit a41cb83, 2026-10-28; the first run had failed because the desktop lockfile was rejected by the runner's newer npm (fixed by regenerating `source/package-lock.json`).
 - [ ] Optional later: sync option with UFS People (section 3) and a decision on repository visibility/branch protection for `United-Field-Services/UFS-tracker`.
 
 ## 11. Rough path to a pilot
