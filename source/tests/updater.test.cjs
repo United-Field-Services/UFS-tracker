@@ -7,7 +7,8 @@ const {createUpdater, feedBase} = require('../src/updater.cjs');
 
 const KEYS = crypto.generateKeyPairSync('ed25519');
 const PUBLIC = KEYS.publicKey.export({type: 'spki', format: 'pem'});
-const INFO = {version: '0.2.1', files: [{sha512: 'sha-ok'}]};
+const INFO = {version: '0.2.1', files: [{url: 'Setup.exe', sha512: 'sha-ok'}]};
+const tick = () => new Promise(resolve => setImmediate(resolve));
 const MANIFEST = 'version: 0.2.1\nfiles:\n  - url: Setup.exe\n    sha512: sha-ok\n    size: 1\npath: Setup.exe\nsha512: sha-ok\n';
 const sign = (text, key = KEYS.privateKey) => crypto.sign(null, Buffer.from(text), key).toString('base64');
 /** A fake update server: manifest text, its signature, or an HTTP status per file. */
@@ -30,7 +31,7 @@ function fixture(overrides = {}) {
   });
   const order = [];
   const deps = {
-    isPackaged: true, currentVersion: '0.2.0', publicKey: PUBLIC, fetch: feed(), getAutoUpdater: () => auto, getServerUrl: () => 'https://tracker.example.org',
+    isPackaged: true, currentVersion: '0.2.0', publicKey: PUBLIC, fetch: feed(), hashFile: async () => 'sha-ok', getAutoUpdater: () => auto, getServerUrl: () => 'https://tracker.example.org',
     canInstall: () => true, prepareToInstall: async () => { order.push('prepared'); }, onChange: () => { order.push('changed'); }, ...overrides,
   };
   return {auto, order, updater: createUpdater(deps)};
@@ -69,15 +70,15 @@ test('available, download and ready states follow the updater events; download n
   assert.equal(f.auto.calls.filter(call => call[0] === 'download').length, 0, 'nothing downloads without a click');
   await f.updater.download(); assert.deepEqual(f.auto.calls.at(-1), ['download']);
   f.auto.emit('download-progress', {percent: 42.6}); assert.equal(f.updater.snapshot().percent, 43);
-  f.auto.emit('update-downloaded', {version: '0.2.1'}); assert.equal(f.updater.snapshot().status, 'ready');
+  f.auto.emit('update-downloaded', {version: '0.2.1', downloadedFile: 'x'}); await tick(); assert.equal(f.updater.snapshot().status, 'ready');
   f.auto.emit('error', new Error('boom')); assert.equal(f.updater.snapshot().status, 'error');
 });
 
 test('install is refused until the update is downloaded and while tracking; otherwise it prepares first, then installs silently and relaunches', async () => {
   const f = fixture(); await assert.rejects(f.updater.install(), /not been downloaded/);
-  await f.updater.check(); f.auto.emit('update-available', INFO); f.auto.emit('update-downloaded', {version: '0.2.1'});
+  await f.updater.check(); f.auto.emit('update-available', INFO); f.auto.emit('update-downloaded', {version: '0.2.1', downloadedFile: 'x'}); await tick();
   let tracking = true; const busy = fixture({canInstall: () => !tracking});
-  await busy.updater.check(); busy.auto.emit('update-available', INFO); busy.auto.emit('update-downloaded', {version: '0.2.1'});
+  await busy.updater.check(); busy.auto.emit('update-available', INFO); busy.auto.emit('update-downloaded', {version: '0.2.1', downloadedFile: 'x'}); await tick();
   await assert.rejects(busy.updater.install(), /Stop tracking/); assert.equal(busy.auto.calls.some(call => call[0] === 'install'), false);
   tracking = false; await busy.updater.install();
   assert.deepEqual(busy.auto.calls.at(-1), ['install', true, true]); assert.ok(busy.order.includes('prepared'));
@@ -87,7 +88,7 @@ test('install is refused until the update is downloaded and while tracking; othe
 test('preparing to install happens before the installer is launched', async () => {
   const sequence = []; const f = fixture({prepareToInstall: async () => { sequence.push('prepare'); await new Promise(resolve => setTimeout(resolve, 5)); sequence.push('prepared'); }});
   f.auto.quitAndInstall = () => sequence.push('install');
-  await f.updater.check(); f.auto.emit('update-available', INFO); f.auto.emit('update-downloaded', {version: '0.2.1'});
+  await f.updater.check(); f.auto.emit('update-available', INFO); f.auto.emit('update-downloaded', {version: '0.2.1', downloadedFile: 'x'}); await tick();
   await f.updater.install(); assert.deepEqual(sequence, ['prepare', 'prepared', 'install']);
 });
 
@@ -109,10 +110,10 @@ test('only a manifest signed with the release key is accepted: bad signature, wr
 
 test('what the updater finds must match the signed manifest (version and installer hash); a swapped installer is refused', async () => {
   const f = fixture(); await f.updater.check();
-  f.auto.emit('update-available', {version: '0.2.1', files: [{sha512: 'sha-swapped'}]});
+  f.auto.emit('update-available', {version: '0.2.1', files: [{url: 'Setup.exe', sha512: 'sha-swapped'}]});
   assert.equal(f.updater.snapshot().status, 'error'); assert.match(f.updater.snapshot().message, /did not match the signed release manifest/);
   await assert.rejects(f.updater.download(), /no update/);
-  const wrongVersion = fixture(); await wrongVersion.updater.check(); wrongVersion.auto.emit('update-available', {version: '9.9.9', files: [{sha512: 'sha-ok'}]});
+  const wrongVersion = fixture(); await wrongVersion.updater.check(); wrongVersion.auto.emit('update-available', {version: '9.9.9', files: [{url: 'Setup.exe', sha512: 'sha-ok'}]});
   assert.equal(wrongVersion.updater.snapshot().status, 'error');
 });
 
@@ -121,4 +122,38 @@ test('a signed manifest that is not newer than the installed version needs no do
   assert.equal(result.status, 'current'); assert.equal(f.auto.calls.some(call => call[0] === 'check'), false);
   const { compareVersions } = require('../src/updater.cjs');
   assert.ok(compareVersions('0.10.0', '0.9.9') > 0); assert.ok(compareVersions('1.0', '1.0.0') === 0); assert.ok(compareVersions('0.2.0', '0.2.1') < 0);
+});
+test('a second or odd installer entry, a mismatching extra hash or a non-exe file in the updater metadata is refused', async () => {
+  const bad = {
+    'two entries': {version: '0.2.1', files: [{url: 'Setup.exe', sha512: 'sha-ok'}, {url: 'Other.exe', sha512: 'sha-evil'}]},
+    'two entries, first honest': {version: '0.2.1', files: [{url: 'Setup.exe', sha512: 'sha-ok'}, {url: 'Setup2.exe', sha512: 'sha-ok'}]},
+    'not an installer': {version: '0.2.1', files: [{url: 'payload.zip', sha512: 'sha-ok'}]},
+    'top-level hash differs': {version: '0.2.1', files: [{url: 'Setup.exe', sha512: 'sha-ok'}], sha512: 'sha-evil'},
+    'no files': {version: '0.2.1', files: []},
+  };
+  for (const [name, info] of Object.entries(bad)) {
+    const f = fixture(); await f.updater.check(); f.auto.emit('update-available', info);
+    assert.equal(f.updater.snapshot().status, 'error', name);
+  }
+  const good = fixture(); await good.updater.check(); good.auto.emit('update-available', {...INFO, sha512: 'sha-ok'}); assert.equal(good.updater.snapshot().status, 'available');
+});
+
+test('the downloaded installer is hashed and must equal the signed SHA-512 before the update can be installed', async () => {
+  const swapped = fixture({hashFile: async () => 'sha-other-bytes'});
+  await swapped.updater.check(); swapped.auto.emit('update-available', INFO); await swapped.updater.download();
+  swapped.auto.emit('update-downloaded', {version: '0.2.1', downloadedFile: 'x'}); await tick();
+  assert.equal(swapped.updater.snapshot().status, 'error'); assert.match(swapped.updater.snapshot().message, /does not match the signed release manifest/);
+  await assert.rejects(swapped.updater.install(), /not been downloaded/); assert.equal(swapped.auto.calls.some(call => call[0] === 'install'), false);
+  const unreadable = fixture({hashFile: async () => { throw new Error('ENOENT'); }});
+  await unreadable.updater.check(); unreadable.auto.emit('update-available', INFO); unreadable.auto.emit('update-downloaded', {version: '0.2.1', downloadedFile: 'x'}); await tick();
+  assert.equal(unreadable.updater.snapshot().status, 'error'); await assert.rejects(unreadable.updater.install(), /not been downloaded/);
+  const genuine = fixture(); await genuine.updater.check(); genuine.auto.emit('update-available', INFO); genuine.auto.emit('update-downloaded', {version: '0.2.1', downloadedFile: 'x'}); await tick();
+  assert.equal(genuine.updater.snapshot().status, 'ready'); await genuine.updater.install(); assert.deepEqual(genuine.auto.calls.at(-1), ['install', true, true]);
+});
+
+test('the real file hasher produces the base64 SHA-512 that electron-builder writes into latest.yml', async () => {
+  const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+  const {fileSha512} = require('../src/updater.cjs'); const file = path.join(os.tmpdir(), `ufs-hash-${process.pid}.bin`); fs.writeFileSync(file, 'installer bytes');
+  try { assert.equal(await fileSha512(file), crypto.createHash('sha512').update('installer bytes').digest('base64')); await assert.rejects(fileSha512(file + '.missing')); }
+  finally { fs.rmSync(file, {force: true}); }
 });

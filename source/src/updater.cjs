@@ -15,6 +15,15 @@ function feedBase(serverUrl) {
 }
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+
+/** Streaming SHA-512 (base64, the format electron-builder writes into latest.yml) of a downloaded installer. */
+function fileSha512(file) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('sha512'); const stream = fs.createReadStream(file);
+    stream.on('data', chunk => hash.update(chunk)); stream.on('error', reject); stream.on('end', () => resolve(hash.digest('base64')));
+  });
+}
 
 /** Compares dotted numeric versions: positive when a is newer than b. */
 function compareVersions(a, b) {
@@ -51,7 +60,7 @@ async function fetchSignedManifest(base, publicKey, fetchImpl = fetch) {
  * onChange().
  */
 function createUpdater(deps) {
-  let status = 'idle', version = null, percent = 0, message = '', wired = false, updater = null, expected = null;
+  let status = 'idle', version = null, percent = 0, message = '', wired = false, updater = null, expected = null, verified = false;
   const set = (next, extra = {}) => { status = next; version = extra.version ?? version; percent = extra.percent ?? percent; message = extra.message ?? ''; try { deps.onChange?.(); } catch { /* UI refresh only */ } };
   const snapshot = () => ({status, version, percent: Math.round(percent), message, currentVersion: deps.currentVersion, supported: !!deps.isPackaged});
 
@@ -61,14 +70,24 @@ function createUpdater(deps) {
     // Consent and safety: no silent download, no install on quit, no downgrades, no pre-releases.
     updater.autoDownload = false; updater.autoInstallOnAppQuit = false; updater.allowDowngrade = false; updater.allowPrerelease = false;
     // What the updater found must be exactly what the signed manifest authorized (version and installer SHA-512).
+    // Exactly one installer entry, and every hash the server states (files, path entry, top level) equals the signed one.
     updater.on('update-available', info => {
-      const sha = info?.files?.[0]?.sha512 ?? info?.sha512;
-      if (!expected || String(info?.version) !== expected.version || sha !== expected.sha512) { expected = null; set('error', {message: 'The update did not match the signed release manifest. It was not installed.'}); return; }
+      const files = Array.isArray(info?.files) ? info.files : [];
+      const hashes = [...files.map(file => file?.sha512), info?.sha512].filter(value => value !== undefined);
+      const matches = !!expected && String(info?.version) === expected.version && files.length === 1 && /\.exe$/i.test(String(files[0]?.url ?? '')) && hashes.length > 0 && hashes.every(value => value === expected.sha512);
+      if (!matches) { expected = null; verified = false; set('error', {message: 'The update did not match the signed release manifest. It was not installed.'}); return; }
       set('available', {version: expected.version, percent: 0});
     });
     updater.on('update-not-available', () => set('current', {message: 'You have the latest version.'}));
     updater.on('download-progress', progress => set('downloading', {percent: Number(progress?.percent) || 0}));
-    updater.on('update-downloaded', info => set('ready', {version: String(info?.version ?? version ?? ''), percent: 100}));
+    // The installer bytes on disk must hash to the SIGNED SHA-512 before the update can be installed.
+    updater.on('update-downloaded', info => {
+      set('downloading', {percent: 100, message: 'Verifying the download…'});
+      Promise.resolve().then(() => (deps.hashFile || fileSha512)(String(info?.downloadedFile ?? ''))).then(hash => {
+        if (!expected || hash !== expected.sha512) { verified = false; set('error', {message: 'The downloaded installer does not match the signed release manifest. It was not installed.'}); return; }
+        verified = true; set('ready', {version: expected.version, percent: 100});
+      }).catch(() => { verified = false; set('error', {message: 'The downloaded installer could not be verified. It was not installed.'}); });
+    });
     updater.on('error', error => set('error', {message: `Update failed: ${String(error?.message ?? error).split('\n')[0].slice(0, 200)}`}));
     wired = true;
   }
@@ -78,7 +97,7 @@ function createUpdater(deps) {
     if (['checking', 'downloading'].includes(status)) return snapshot();
     const base = feedBase(deps.getServerUrl());
     if (!base) { set('error', {message: 'Sign in to your company server first; updates come from it.'}); return snapshot(); }
-    wire(); set('checking', {message: ''}); expected = null;
+    wire(); set('checking', {message: ''}); expected = null; verified = false;
     try {
       const manifest = await fetchSignedManifest(base, deps.publicKey ?? require('./update-public-key.cjs'), deps.fetch);
       if (compareVersions(manifest.version, deps.currentVersion) <= 0) { set('current', {message: 'You have the latest version.'}); return snapshot(); }
@@ -98,7 +117,7 @@ function createUpdater(deps) {
   }
 
   async function install() {
-    if (status !== 'ready') throw new Error('The update has not been downloaded yet.');
+    if (status !== 'ready' || !verified) throw new Error('The update has not been downloaded yet.');
     if (!deps.canInstall()) throw new Error('Stop tracking before installing the update.');
     await deps.prepareToInstall();
     updater.quitAndInstall(true, true); // silent installer, relaunch afterwards; local data stays where it is
@@ -108,4 +127,4 @@ function createUpdater(deps) {
   return {check, download, install, snapshot, feedBase};
 }
 
-module.exports = {createUpdater, feedBase, fetchSignedManifest, compareVersions};
+module.exports = {createUpdater, feedBase, fetchSignedManifest, compareVersions, fileSha512};
